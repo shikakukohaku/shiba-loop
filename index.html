@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SHIBA LOOP (prototype)</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>%F0%9F%90%95</text></svg>" />
+    <style>
+      :root {
+        --ink: #f4efe6;
+        --dim: rgba(244, 239, 230, 0.55);
+        --panel: rgba(12, 14, 20, 0.72);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: #0b0d12; overflow: hidden; }
+      body {
+        font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", system-ui, sans-serif;
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+      }
+      #stage { position: fixed; inset: 0; }
+      #stage canvas { display: block; }
+      /* 巻き戻し中だけ画面を歪ませる（色収差風 + 拡大） */
+      #stage.rewinding {
+        filter: hue-rotate(-25deg) saturate(1.6) contrast(1.15);
+        transform: scale(1.02);
+        transition: filter 120ms linear;
+      }
+      #stage.rewinding::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+          repeating-linear-gradient(0deg, rgba(150, 215, 255, 0.16) 0 2px, transparent 2px 5px),
+          radial-gradient(ellipse at center, transparent 38%, rgba(8, 16, 34, 0.72) 100%);
+        animation: jitter 90ms steps(2) infinite;
+      }
+      @keyframes jitter {
+        0%   { transform: translate(0, 0); }
+        50%  { transform: translate(-2px, 1px); }
+        100% { transform: translate(2px, -1px); }
+      }
+
+      .hud {
+        position: fixed;
+        pointer-events: none;
+        user-select: none;
+      }
+      /* 左上：デバッグ表示 */
+      #debugPanel {
+        top: 10px; left: 12px;
+        font: 12px/1.6 ui-monospace, "SFMono-Regular", Menlo, monospace;
+        color: var(--dim);
+        background: var(--panel);
+        padding: 6px 10px;
+        border-radius: 6px;
+        white-space: pre;
+      }
+      /* 右上：操作一覧 */
+      #keyPanel {
+        top: 10px; right: 12px;
+        font: 11px/1.7 ui-monospace, Menlo, monospace;
+        color: var(--dim);
+        background: var(--panel);
+        padding: 6px 10px;
+        border-radius: 6px;
+        text-align: right;
+        white-space: pre;
+      }
+      /* 中央下：今やること */
+      #hint {
+        bottom: 46px; left: 50%;
+        transform: translateX(-50%);
+        font-size: 15px;
+        letter-spacing: 0.04em;
+        background: var(--panel);
+        padding: 9px 18px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        opacity: 0;
+        transition: opacity 220ms ease;
+      }
+      #hint.show { opacity: 1; }
+      #hint.urgent {
+        border-color: rgba(255, 214, 120, 0.9);
+        color: #ffd678;
+        animation: pulse 900ms ease-in-out infinite;
+      }
+      @keyframes pulse { 0%, 100% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(1.05); } }
+
+      /* 飼い主のセリフ（3D座標に貼り付ける） */
+      #speech {
+        position: fixed;
+        transform: translate(-50%, -100%);
+        background: rgba(250, 250, 252, 0.94);
+        color: #14161c;
+        font-size: 14px;
+        padding: 7px 13px;
+        border-radius: 12px;
+        white-space: nowrap;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 160ms ease;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+      }
+      #speech::after {
+        content: "";
+        position: absolute;
+        left: 50%; bottom: -7px;
+        margin-left: -6px;
+        border: 6px solid transparent;
+        border-top-color: rgba(250, 250, 252, 0.94);
+        border-bottom: 0;
+      }
+      #speech.show { opacity: 1; }
+
+      /* 全画面オーバーレイ（巻き戻し確認・タイトル） */
+      #overlay {
+        position: fixed; inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: rgba(6, 7, 11, 0);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 500ms ease, background 500ms ease;
+        text-align: center;
+      }
+      #overlay.show { opacity: 1; pointer-events: auto; }
+      #overlay.dark { background: rgba(6, 7, 11, 0.86); }
+      #overlay.black { background: #06070b; }
+      #overlayTitle {
+        font-size: 40px;
+        letter-spacing: 0.34em;
+        margin-left: 0.34em;
+        font-weight: 300;
+      }
+      #overlayText { font-size: 15px; color: var(--dim); line-height: 1.9; }
+      #overlayAction {
+        margin-top: 6px;
+        font-size: 16px;
+        color: #ffd678;
+        border: 1px solid rgba(255, 214, 120, 0.6);
+        border-radius: 999px;
+        padding: 10px 24px;
+        cursor: pointer;
+        background: rgba(255, 214, 120, 0.06);
+        animation: pulse2 1.4s ease-in-out infinite;
+      }
+      @keyframes pulse2 { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
+      #overlayAction:hover { background: rgba(255, 214, 120, 0.16); }
+      .hidden { display: none !important; }
+
+      #noscript {
+        position: fixed; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        padding: 32px; text-align: center; line-height: 2;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+
+    <div id="debugPanel" class="hud"></div>
+    <div id="keyPanel" class="hud">WASD / 矢印 : 移動
+Space : 拒否柴
+E : 抱っこをせがむ
+R / T / G / H : デバッグ</div>
+    <div id="hint" class="hud"></div>
+    <div id="speech"></div>
+
+    <div id="overlay">
+      <div id="overlayTitle"></div>
+      <div id="overlayText"></div>
+      <div id="overlayAction" class="hidden"></div>
+    </div>
+
+    <noscript>
+      <div id="noscript">
+        このページは JavaScript で 3D を描画します。<br />
+        スクリプトが無効な環境（クイックルック等）では何も表示されません。<br />
+        ブラウザで JavaScript を有効にして開いてください。
+      </div>
+    </noscript>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
