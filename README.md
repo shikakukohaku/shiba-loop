@@ -24,10 +24,16 @@ npm run preview  # ビルド結果を確認
 ## 公開
 
 `main` に push すると GitHub Actions が Vite でビルドして GitHub Pages へ出す
-（`.github/workflows/pages.yml`）。最初の一度だけ、リポジトリの
-**Settings → Pages → Source** を **GitHub Actions** にする必要がある。
+（`.github/workflows/pages.yml`）。
+
+**最初の一度だけ、手で有効にする必要がある。**
+リポジトリの **Settings → Pages → Source** を **GitHub Actions** にする。
+ワークフローには `enablement: true` を付けてあるが、`GITHUB_TOKEN` には
+Pages サイトを新規作成する権限がないため（`Resource not accessible by integration`）、
+初回はこれだけ人がやる。以降は push するだけで反映される。
+
 プライベートリポジトリの Pages は有料プランの機能なので、無料プランなら
-リポジトリを public にする。
+リポジトリは public にしておく。
 
 `vite.config.ts` の `base` は `'./'`（相対パス）にしてあるので、
 `https://<user>.github.io/shiba-loop/` のようなサブパスでもそのまま動く。
