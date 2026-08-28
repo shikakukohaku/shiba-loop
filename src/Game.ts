@@ -13,7 +13,6 @@ import { FallingObjectHazard } from './hazards/FallingObjectHazard';
 import { ManholeHazard } from './hazards/ManholeHazard';
 import { BicycleHazard } from './hazards/BicycleHazard';
 import type { Advice, Hazard, HazardContext } from './hazards/Hazard';
-import { DangerMarker } from './world/DangerMarker';
 import { World, OWNER_WAYPOINTS, OWNER_START, DOG_START, WRAITH_SPOT, GOAL_X } from './world/World';
 import { UI } from './ui/UI';
 
@@ -32,7 +31,7 @@ const RETRY_PROMPT_DELAY = 1.0;      // 2回目以降はすぐ出す
 const WRAITH_NEAR_DISTANCE = 2.6;
 const SPEECH_COOLDOWN = 3.2;
 const HINT_DISTANCE = 9;   // 事故の何メートル手前からヒントを出すか
-const MARKER_FADE_IN = 14; // 危険マーカーが濃くなり始める距離
+const VISION_HINT_HOLD = 3.4; // 未来視の直後、この秒数はヒントを書き換えない
 
 /** 操作説明はキーボードとタッチで文言を変える */
 const TEXT = {
@@ -63,6 +62,7 @@ const ADVICE_TEXT: Record<Advice, { key: string; touch: string }> = {
   crouch: { key: 'E：抱っこをせがんでしゃがませる', touch: '「抱っこ」でしゃがませる' },
   stop: { key: 'Space：拒否柴で足を止める', touch: '「拒否柴」で足を止める' },
   pull: { key: 'リードを張って横へ引っ張る', touch: 'リードを張って横へ引っ張る' },
+  pole: { key: '電柱の向こうへ回り込んでリードを引っかける', touch: '電柱の向こうへ回り込んでリードを引っかける' },
 };
 
 interface VisionReturn {
@@ -94,7 +94,8 @@ export class Game {
     new ManholeHazard(),
     new BicycleHazard(),
   ];
-  private markers = new Map<string, DangerMarker>();
+  /** 未来視で見た事故の名前。見たものだけヒントが出る */
+  private visionSeen = new Set<string>();
 
   private history = new History(CONFIG.rewindSeconds + 4);
 
@@ -112,6 +113,8 @@ export class Game {
   private wraithShown = false;
   private huggedThisLoop = false;
   private deaths = 0;
+  private slowMo = 0;
+  private hintLock = 0;
 
   // 未来視
   private visionDone = false;
@@ -181,9 +184,9 @@ export class Game {
     this.visionDone = false;
     this.visionFreeze = 0;
     this.visionReturn = null;
-
-    for (const m of this.markers.values()) this.scene.remove(m.root);
-    this.markers.clear();
+    this.visionSeen.clear();
+    this.slowMo = 0;
+    this.hintLock = 0;
 
     this.dog.restore({
       x: DOG_START.x, z: DOG_START.z, facing: Math.PI / 2,
@@ -196,6 +199,7 @@ export class Game {
       crouchBlend: 0, deathBlend: 0, walkPhase: 0, sinking: false, sinkBlend: 0,
     });
     for (const h of this.hazards) h.reset();
+    this.leash.clear();
     this.wraith.hide();
     this.history.clear();
 
@@ -226,14 +230,14 @@ export class Game {
       time: this.loopTime,
       vision: this.state === 'PRECOGNITION',
       onOwnerHit: (h) => this.onOwnerHit(h),
-      onNearMiss: (h) => this.onNearMiss(h),
+      onNearMiss: (h, d) => this.onNearMiss(h, d),
     };
   }
 
   private onOwnerHit(hazard: Hazard): void {
-    // 未来視では死なない。「ここで死ぬ」という印だけ残す
+    // 未来視では死なない。何を見たかだけ覚えておく
     if (this.state === 'PRECOGNITION') {
-      this.addMarker(hazard);
+      this.visionSeen.add(hazard.name);
       this.visionFreeze = CONFIG.visionFreezeDuration;
       this.visionCaption = hazard.label;
       return;
@@ -251,17 +255,16 @@ export class Game {
     this.ui.hideHint();
   }
 
-  private onNearMiss(hazard: Hazard): void {
+  /** かすめて助かった瞬間。近ければ時間を落として「ギリギリ」を見せる */
+  private onNearMiss(hazard: Hazard, distance: number): void {
     if (this.state === 'PRECOGNITION' || this.owner.state === 'DEAD') return;
-    this.rig.shake(0.12);
+    if (distance < CONFIG.closeCallDistance) {
+      this.slowMo = CONFIG.slowMoDuration;
+      this.rig.shake(0.22);
+    } else {
+      this.rig.shake(0.1);
+    }
     this.say(hazard.nearMissLine, 2.2, true);
-  }
-
-  private addMarker(hazard: Hazard): void {
-    if (this.markers.has(hazard.name)) return;
-    const marker = new DangerMarker(this.owner.position);
-    this.markers.set(hazard.name, marker);
-    this.scene.add(marker.root);
   }
 
   private say(text: string, seconds = 2.4, force = false): void {
@@ -285,7 +288,12 @@ export class Game {
   }
 
   private frame(): void {
-    const dt = Math.min(this.clock.getDelta(), 1 / 20);
+    let dt = Math.min(this.clock.getDelta(), 1 / 20);
+    if (this.slowMo > 0) {
+      this.slowMo -= dt;
+      dt *= CONFIG.slowMoFactor;
+    }
+    this.hintLock = Math.max(0, this.hintLock - dt);
     this.input.update();
     this.handleDebugKeys();
 
@@ -323,7 +331,6 @@ export class Game {
     }
 
     this.wraith.update(dt, this.dog.position);
-    this.updateMarkers(dt);
 
     if (this.state === 'PRECOGNITION') {
       this.rig.snapTo(this.owner.position, this.owner.position);
@@ -347,16 +354,6 @@ export class Game {
     this.sun.target.updateMatrixWorld();
   }
 
-  private updateMarkers(dt: number): void {
-    for (const h of this.hazards) {
-      const m = this.markers.get(h.name);
-      if (!m) continue;
-      const ahead = h.dangerX - this.owner.position.x;
-      const proximity = THREE.MathUtils.clamp(1 - ahead / MARKER_FADE_IN, 0, 1);
-      m.update(dt, ahead < -3 ? 0.15 : proximity);
-    }
-  }
-
   /** 犬・飼い主・リード・事故を1フレーム進める */
   private simulate(dt: number, hazardsActive: boolean, playerControlled: boolean): void {
     let move = this.zeroMove.set(0, 0);
@@ -372,9 +369,11 @@ export class Game {
     const bracing = playerControlled && this.input.isDown('brace') && this.owner.state !== 'DEAD';
     this.dog.update(dt, move, bracing);
 
-    // リードが張った状態で踏ん張ると、飼い主の足が止まる
+    // リードが張った状態で踏ん張るか、電柱に引っかかっていると、飼い主の足が止まる。
+    // 電柱の場合に減速させないと、飼い主が電柱のまわりを滑って回り込んでしまう
     const leash = this.leash.state;
-    this.owner.setSpeedFactor(bracing && leash.taut ? CONFIG.braceOwnerSpeedFactor : 1);
+    const held = (bracing && leash.taut) || (leash.wrapped && leash.taut);
+    this.owner.setSpeedFactor(held ? CONFIG.braceOwnerSpeedFactor : 1);
     this.owner.update(dt);
 
     this.leash.apply(this.dog, this.owner, dt);
@@ -387,7 +386,9 @@ export class Game {
     }
 
     if (playerControlled && this.owner.state !== 'DEAD') {
-      if (bracing && leash.taut) this.say('こら、どうした。行くぞー');
+      if (leash.released) this.say('お、外れた', 1.6);
+      else if (leash.wrapped && leash.taut) this.say('あれ、引っかかってるぞ');
+      else if (bracing && leash.taut) this.say('こら、どうした。行くぞー');
       else if (leash.pulled > 0.004) this.say('引っ張るなって');
     }
   }
@@ -437,7 +438,7 @@ export class Game {
   }
 
   private updatePlayingHints(): void {
-    if (this.reachedGoal) return;
+    if (this.reachedGoal || this.hintLock > 0) return;
     const next = this.nextHazard();
 
     // 1周目はまだ何も知らない。基本操作だけ出す
@@ -463,7 +464,7 @@ export class Game {
     }
 
     // 未来視で見た事故だけヒントを出す（見ていないものは自分で気づく）
-    if (!this.markers.has(next.name)) {
+    if (!this.visionSeen.has(next.name)) {
       this.ui.hideHint();
       return;
     }
@@ -578,11 +579,9 @@ export class Game {
       this.rig.setZoom(1);
 
       // 初回の巻き戻しのあとだけ、首輪のアイテムが未来を見せてくる
+      this.leash.clear();
       if (!this.visionDone) this.beginVision();
-      else {
-        this.state = 'PLAYING_LOOP';
-        this.say('……', 0.8, true);
-      }
+      else this.state = 'PLAYING_LOOP';
     }
   }
 
@@ -633,7 +632,7 @@ export class Game {
       if (this.visionFreeze > 0) return;
     }
 
-    const sawEverything = this.markers.size >= this.hazards.length;
+    const sawEverything = this.visionSeen.size >= this.hazards.length;
     if (sawEverything || this.owner.position.x >= GOAL_X) this.endVision();
   }
 
@@ -649,14 +648,16 @@ export class Game {
     }
     this.visionReturn = null;
     this.history.clear();
+    this.leash.clear();
     this.dog.gemActive = false;
     this.ui.setVision(false);
-    this.ui.hideHint();
     this.rig.setZoom(1);
     this.rig.snapTo(this.dog.position, this.owner.position);
     this.state = 'PLAYING_LOOP';
     this.stateTime = 0;
-    this.say('……この先で、みんな死ぬ', 2.6, true);
+    // 犬はしゃべらないので、飼い主の吹き出しではなく画面の文字で出す
+    this.ui.showHint(`見えた。この先で ${this.visionSeen.size} 回、飼い主が死ぬ`, true);
+    this.hintLock = VISION_HINT_HOLD;
   }
 
   private updateClear(): void {
@@ -733,7 +734,7 @@ export class Game {
       `loop  : ${this.loop}  deaths: ${this.deaths}`,
       `time  : ${this.loopTime.toFixed(2)}s`,
       `owner : ${this.owner.state}  x=${this.owner.position.x.toFixed(1)}`,
-      `leash : ${l.distance.toFixed(2)} / ${CONFIG.leashLength}${l.taut ? ' [TAUT]' : ''}`,
+      `leash : ${l.distance.toFixed(2)} / ${CONFIG.leashLength}${l.taut ? ' [TAUT]' : ''}${l.wrapped ? ' [POLE]' : ''}`,
       `next  : ${next ? `${next.name} @${next.dangerX.toFixed(1)}` : '-'}`,
     ].join('\n');
   }

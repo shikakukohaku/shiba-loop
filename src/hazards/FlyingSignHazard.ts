@@ -25,8 +25,11 @@ export class FlyingSignHazard implements Hazard {
   readonly nearMissLine = 'うわ、なんか飛んでったな';
   readonly root = new THREE.Group();
 
-  triggerX = 3.3;
   readonly dangerX = 8;
+  // 予告を出してから当たるまでに飼い主が進む距離のぶん、手前で予告を始める
+  triggerX = this.dangerX - CONFIG.ownerSpeed
+    * (CONFIG.signWarnDelay
+      + new THREE.Vector3(this.dangerX, CONFIG.ownerHeadHeight, 1.3).distanceTo(SIGN_ORIGIN) / CONFIG.signSpeed);
 
   private mesh: THREE.Group;
   private hitBox: THREE.Mesh;
@@ -133,7 +136,7 @@ export class FlyingSignHazard implements Hazard {
 
     if (!this.nearMissDone && !this.hitDone && this.passedOwner(ctx.owner)) {
       this.nearMissDone = true;
-      ctx.onNearMiss(this);
+      ctx.onNearMiss(this, this.mesh.position.distanceTo(ctx.owner.getHeadPoint()));
     }
 
     if (this.age > CONFIG.signLifetime) {

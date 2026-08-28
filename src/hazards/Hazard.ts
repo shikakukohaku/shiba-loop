@@ -3,7 +3,7 @@ import type { Owner } from '../entities/Owner';
 import type { Dog } from '../entities/Dog';
 
 /** その事故をどう避けるか。画面のヒント文はゲーム側でこれから引く。 */
-export type Advice = 'crouch' | 'stop' | 'pull';
+export type Advice = 'crouch' | 'stop' | 'pull' | 'pole';
 
 export interface HazardContext {
   owner: Owner;
@@ -14,8 +14,8 @@ export interface HazardContext {
   vision: boolean;
   /** 飼い主に当たったときに呼ぶ。1ループにつき1回だけ */
   onOwnerHit: (hazard: Hazard) => void;
-  /** 飼い主のすぐ横を通り過ぎたときに呼ぶ（＝回避成功） */
-  onNearMiss: (hazard: Hazard) => void;
+  /** 飼い主に当たらずに済んだときに呼ぶ。distance はどれだけ近くをかすめたか */
+  onNearMiss: (hazard: Hazard, distance: number) => void;
 }
 
 /**

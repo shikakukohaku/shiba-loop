@@ -17,16 +17,18 @@ interface BikeSnapshot {
 /**
  * 事故4: 路地から飛び出す自転車。
  * 決まった場所を決まった速さで横切るだけ。数秒足を止めれば前を通り過ぎる。
+ * 手前に電柱があるので、リードを引っかけて止めるのが本命。拒否柴でもよい。
  */
 export class BicycleHazard implements Hazard {
   readonly name = 'bicycle';
   readonly label = '飛び出す自転車';
-  readonly advice: Advice = 'stop';
+  readonly advice: Advice = 'pole';
   readonly nearMissLine = 'わっ。自転車、危ないなあ';
   readonly root = new THREE.Group();
 
-  triggerX = BIKE_X - 6;
   readonly dangerX = BIKE_X;
+  triggerX = this.dangerX - CONFIG.ownerSpeed
+    * (CONFIG.bikeWarnDelay + (1.4 - CONFIG.bikeStartZ) / CONFIG.bikeSpeed);
 
   private bike = new THREE.Group();
   private wheels: THREE.Mesh[] = [];
@@ -152,7 +154,10 @@ export class BicycleHazard implements Hazard {
       this.bike.visible = false;
     } else if (!this.hitDone && !this.nearMissDone && this.bike.position.z > ctx.owner.position.z + 1.4) {
       this.nearMissDone = true;
-      ctx.onNearMiss(this);
+      ctx.onNearMiss(this, Math.hypot(
+        ctx.owner.position.x - this.bike.position.x,
+        ctx.owner.position.z - this.bike.position.z,
+      ));
     }
   }
 

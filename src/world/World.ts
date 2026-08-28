@@ -28,6 +28,10 @@ export const BIKE_X = 40;
 /** 怪異が立つ位置（工事現場の奥） */
 export const WRAITH_SPOT = new THREE.Vector3(12.8, 0, -7.4);
 
+/** 電柱の位置。リードを引っかけられる（Leash が参照する） */
+export const POLES: THREE.Vector2[] = [];
+for (let x = -12; x < 56; x += 8) POLES.push(new THREE.Vector2(x, 2.7));
+
 const C_GROUND = 0x6f7a63;
 const C_ROAD = 0x3a3d44;
 const C_WALK = 0x9a9b93;
@@ -154,12 +158,12 @@ export class World {
   }
 
   private buildPoles(): void {
-    for (let x = -12; x < 56; x += 8) {
+    for (const p of POLES) {
       const pole = new THREE.Mesh(
         new THREE.CylinderGeometry(0.11, 0.13, 6, 8),
         new THREE.MeshLambertMaterial({ color: 0xb0aca3 }),
       );
-      pole.position.set(x, 3, 2.7);
+      pole.position.set(p.x, 3, p.y);
       pole.castShadow = true;
       this.root.add(pole);
 
@@ -167,8 +171,17 @@ export class World {
         new THREE.BoxGeometry(1.4, 0.09, 0.09),
         new THREE.MeshLambertMaterial({ color: 0x8b8880 }),
       );
-      arm.position.set(x, 5.5, 2.7);
+      arm.position.set(p.x, 5.5, p.y);
       this.root.add(arm);
+
+      // 根本のリング。リードが引っかかる高さの目印
+      const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.17, 0.19, 0.3, 8),
+        new THREE.MeshLambertMaterial({ color: 0x8f8b83 }),
+      );
+      base.position.set(p.x, 0.15, p.y);
+      base.castShadow = true;
+      this.root.add(base);
     }
   }
 

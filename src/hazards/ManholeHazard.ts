@@ -120,7 +120,7 @@ export class ManholeHazard implements Hazard {
     if (!this.hitDone && !this.nearMissDone && ox > MANHOLE_SPOT.x + 0.8) {
       this.nearMissDone = true;
       this.phase = 'done';
-      ctx.onNearMiss(this);
+      ctx.onNearMiss(this, Math.abs(ctx.owner.position.z - MANHOLE_SPOT.z));
     }
   }
 

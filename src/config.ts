@@ -15,6 +15,18 @@ export const CONFIG = {
   leashPullFactor: 0.55, // 張った状態で犬が引くと飼い主がどれだけ引きずられるか
   leashMaxPullPerSecond: 1.2, // 飼い主が引かれる速度の上限
 
+  // --- リードを電柱に巻きつける ---
+  // 犬が電柱の向こう側へ回り込むと、リードが電柱に引っかかる。
+  // そうなると飼い主は「電柱からリードの長さまで」しか進めない。
+  poleWrapRadius: 0.26,    // リードがこの距離まで電柱に寄ったら引っかかる
+  poleContactRadius: 0.16, // 見た目上、リードが電柱に触る半径
+  poleUnwrapCos: -0.966,   // 角度が165度を超えて真っ直ぐになったら外れる
+  poleCommitCos: -0.766,   // 角度が140度を切ったら「ちゃんと回り込んだ」とみなす
+  poleGrace: 0.5,          // 回り込まないまま触れただけなら、この秒数で外れる
+  poleHoldMax: 3.0,        // 張りっぱなしがこの秒数を超えたら滑って外れる（詰み防止）
+  poleRewrapDelay: 1.2,    // 外れた直後に同じ電柱へ巻き直さないための待ち
+  poleMinSlack: 0.35,      // 電柱と犬のあいだに最低限残す長さ
+
   // --- 飼い主 ---
   ownerSpeed: 1.5,
   ownerTurnSpeed: 4,
@@ -36,7 +48,7 @@ export const CONFIG = {
   // 速すぎると予測が当たりすぎて、足を止めさせても当たってしまう。
   // 遅いほど「歩みを止める／横にずらす」が効くようになる。
   signSpeed: 8.5,
-  signWarnDelay: 2.6,  // 予告地点を越えてから飛んでくるまで
+  signWarnDelay: 1.5,  // 予告地点を越えてから飛んでくるまで
   signLeadTime: 0.0,   // 予測射撃の補正（+で先読み）
   signLifetime: 3.0,   // 発射から消えるまで
   signHitRadius: 0.36,
@@ -45,11 +57,11 @@ export const CONFIG = {
   fallHeight: 9,        // 落ち始める高さ
   fallGravity: 20,
   fallHitRadius: 0.85,  // この距離に飼い主がいたら当たる
-  fallWarnDelay: 2.7,   // 予告地点を越えてから落ち始めるまで
+  fallWarnDelay: 1.4,   // 予告地点を越えてから落ち始めるまで
 
   // --- 事故3: マンホール ---
   manholeRadius: 0.46,      // 穴の半径。ここに飼い主が入ると落ちる
-  manholeOpenDistance: 5.0, // 飼い主がこれだけ近づくと蓋が外れる
+  manholeOpenDistance: 3.4, // 飼い主がこれだけ近づくと蓋が外れる
   manholeSinkDepth: 2.4,
 
   // --- 事故4: 自転車 ---
@@ -57,12 +69,17 @@ export const CONFIG = {
   bikeHitRadius: 0.8,
   bikeStartZ: -8,   // 路地の奥から
   bikeEndZ: 11,     // 車道の方へ抜ける
-  bikeWarnDelay: 2.7, // 予告地点を越えてから飛び出すまで
+  bikeWarnDelay: 1.5, // 予告地点を越えてから飛び出すまで
 
   // --- タイムリープ ---
   rewindSeconds: 6,         // 死亡時点から何秒巻き戻すか
   rewindDuration: 1.4,      // 巻き戻し演出の長さ（実時間）
   deathPauseDuration: 0.35, // 直撃時に時間が止まる長さ
+
+  // --- ギリギリで避けたときの演出 ---
+  slowMoDuration: 0.6,   // 実時間で何秒スローにするか
+  slowMoFactor: 0.25,    // その間の時間の流れ
+  closeCallDistance: 2.0, // これより近くをかすめたらスローにする
 
   // --- 未来視 ---
   visionSpeed: 5,          // 未来視中に時間を何倍で流すか

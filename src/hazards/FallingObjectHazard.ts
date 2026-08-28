@@ -27,8 +27,9 @@ export class FallingObjectHazard implements Hazard {
   readonly nearMissLine = 'うわっ。なんか落ちてきたぞ';
   readonly root = new THREE.Group();
 
-  triggerX = FALL_SPOT.x - 5.5;
   readonly dangerX = FALL_SPOT.x;
+  triggerX = this.dangerX - CONFIG.ownerSpeed
+    * (CONFIG.fallWarnDelay + Math.sqrt((2 * CONFIG.fallHeight) / CONFIG.fallGravity));
 
   private beam: THREE.Mesh;
   private shadow: THREE.Mesh;
@@ -155,7 +156,8 @@ export class FallingObjectHazard implements Hazard {
     this.setShadow(0);
     if (!this.hitDone && !this.nearMissDone && ctx.owner.state !== 'DEAD') {
       this.nearMissDone = true;
-      ctx.onNearMiss(this);
+      const d = Math.hypot(ctx.owner.position.x - FALL_SPOT.x, ctx.owner.position.z - FALL_SPOT.z);
+      ctx.onNearMiss(this, d);
     }
   }
 
