@@ -26,7 +26,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # Pages がまだ有効でなければ、ここで有効にする（Settings を触らずに済む）
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
