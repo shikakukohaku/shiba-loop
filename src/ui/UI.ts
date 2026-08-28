@@ -9,7 +9,7 @@ export class UI {
   private overlay = document.getElementById('overlay') as HTMLDivElement;
   private overlayTitle = document.getElementById('overlayTitle') as HTMLDivElement;
   private overlayText = document.getElementById('overlayText') as HTMLDivElement;
-  private overlayAction = document.getElementById('overlayAction') as HTMLDivElement;
+  private overlayAction = document.getElementById('overlayAction') as HTMLButtonElement;
 
   private speechTimer = 0;
   private screenPos = new THREE.Vector3();

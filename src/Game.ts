@@ -4,6 +4,7 @@ import { Dog } from './entities/Dog';
 import { Owner } from './entities/Owner';
 import { Wraith } from './entities/Wraith';
 import { Input } from './systems/Input';
+import { Touch } from './systems/Touch';
 import { Leash } from './systems/Leash';
 import { CameraRig } from './systems/CameraRig';
 import { History } from './systems/History';
@@ -26,6 +27,26 @@ const WRAITH_NEAR_DISTANCE = 2.6; // 犬が飼い主に近付いたと見なす�
 const SUCCESS_DELAY = 1.2;        // 回避してから成功シーケンスに入るまで
 const SPEECH_COOLDOWN = 3.5;
 
+/** 操作説明はキーボードとタッチで文言を変える */
+const TEXT = {
+  move: {
+    key: 'WASD / 矢印キー：柴犬を動かす',
+    touch: '画面の左側をなぞって柴犬を動かす',
+  },
+  brace: {
+    key: 'Space：拒否柴（踏ん張って飼い主を止める）',
+    touch: '「拒否柴」を押しっぱなしにすると踏ん張る',
+  },
+  hugFar: {
+    key: 'E：抱っこをせがむ（飼い主に近づく）',
+    touch: '飼い主に近づいて「抱っこ」を押す',
+  },
+  hug: {
+    key: 'E：抱っこをせがむ',
+    touch: '「抱っこ」を押す',
+  },
+} as const;
+
 export class Game {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -38,6 +59,7 @@ export class Game {
   private wraith = new Wraith();
   private leash = new Leash();
   private input = new Input();
+  private touch: Touch;
   private ui: UI;
 
   private sign = new FlyingSignHazard();
@@ -66,7 +88,9 @@ export class Game {
 
   constructor(container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    // タッチ端末は解像度を少し落とす。iPad の DPR 2 で影まで描くと重い
+    const coarse = matchMedia('(pointer: coarse)').matches;
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, coarse ? 1.5 : 2));
     this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -88,6 +112,7 @@ export class Game {
 
     this.rig = new CameraRig(innerWidth / innerHeight);
     this.ui = new UI(() => this.input.injectConfirm());
+    this.touch = new Touch(this.input);
 
     addEventListener('resize', () => this.onResize());
     this.renderer.domElement.addEventListener('click', () => this.input.injectConfirm());
@@ -137,7 +162,12 @@ export class Game {
     this.ui.hideOverlay();
     this.ui.clearSpeech();
     this.ui.setRewinding(false);
-    this.ui.showHint('WASD / 矢印キー：柴犬を動かす');
+    this.ui.showHint(this.text('move'));
+  }
+
+  /** 操作説明の文言を、キーボードかタッチかで選ぶ */
+  private text(key: keyof typeof TEXT): string {
+    return this.touch.enabled ? TEXT[key].touch : TEXT[key].key;
   }
 
   private hazardContext(): HazardContext {
@@ -313,12 +343,12 @@ export class Game {
       this.ui.hideHint();
     } else if (this.state === 'PLAYING_SECOND_LOOP' && toHazard < 3.2 && toHazard > -0.6) {
       const d = Math.hypot(this.dog.position.x - this.owner.position.x, this.dog.position.z - this.owner.position.z);
-      this.ui.showHint(d > CONFIG.hugRange ? 'E：抱っこをせがむ（飼い主に近づく）' : 'E：抱っこをせがむ', true);
+      this.ui.showHint(this.text(d > CONFIG.hugRange ? 'hugFar' : 'hug'), true);
       this.hugPromptShown = true;
     } else if (this.hugPromptShown && toHazard <= -0.6) {
       this.ui.hideHint();
     } else if (this.state === 'PLAYING_FIRST_LOOP' && this.loopTime > 3 && this.loopTime < 6) {
-      this.ui.showHint('Space：拒否柴（踏ん張って飼い主を止める）');
+      this.ui.showHint(this.text('brace'));
     } else if (this.state === 'PLAYING_FIRST_LOOP' && this.loopTime >= 6) {
       this.ui.hideHint();
     }
@@ -369,7 +399,7 @@ export class Game {
       this.dog.gemActive = true;
       this.ui.showOverlay({
         text: '首輪のアイテムが光っている。',
-        action: '時間を巻き戻す（Enter / クリック）',
+        action: '時間を巻き戻す',
         mode: 'dim',
       });
       if (this.input.wasPressed('confirm')) this.beginRewind();
@@ -432,7 +462,7 @@ export class Game {
       this.ui.showOverlay({
         title: 'SHIBA LOOP',
         text: 'Prototype Clear',
-        action: 'R：もう一度',
+        action: 'もう一度あそぶ',
         mode: 'black',
       });
       if (this.input.wasPressed('confirm')) this.resetAll();

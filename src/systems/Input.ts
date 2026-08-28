@@ -6,8 +6,12 @@ import * as THREE from 'three';
 export class Input {
   private down = new Set<string>();
   private pressed = new Set<string>();
+  // タッチ（画面上のスティックとボタン）から入る分。キーボードと同じ扱いにする
+  private virtualDown = new Set<string>();
+  private virtualPressed = new Set<string>();
+  private readonly axis = new THREE.Vector2();
 
-  /** カメラ基準の移動ベクトル（XZ平面、長さ0〜1） */
+  /** 画面基準の移動ベクトル（x=右, y=下、長さ0〜1） */
   readonly move = new THREE.Vector2();
 
   constructor() {
@@ -45,25 +49,48 @@ export class Input {
 
   /** 毎フレーム先頭で呼ぶ。移動ベクトルを更新する。 */
   update(): void {
-    // 画面の上方向 = ワールドの -Z、右 = +X（カメラを +X+Z 側から見下ろしているため）
     const x = (this.down.has('right') ? 1 : 0) - (this.down.has('left') ? 1 : 0);
     const z = (this.down.has('down') ? 1 : 0) - (this.down.has('up') ? 1 : 0);
     this.move.set(x, z);
     if (this.move.lengthSq() > 1) this.move.normalize();
+    // キーが押されていなければ、スティックの倒し具合をそのまま使う
+    if (this.move.lengthSq() < 0.0001) this.move.copy(this.axis);
   }
 
   /** 毎フレーム末尾で呼ぶ。 */
   endFrame(): void {
     this.pressed.clear();
+    this.virtualPressed.clear();
   }
 
   isDown(key: string): boolean {
-    return this.down.has(key);
+    return this.down.has(key) || this.virtualDown.has(key);
   }
 
   /** このフレームで押された瞬間かどうか */
   wasPressed(key: string): boolean {
-    return this.pressed.has(key);
+    return this.pressed.has(key) || this.virtualPressed.has(key);
+  }
+
+  /** 画面上のスティックから移動を入れる（x=右, y=下、長さ0〜1） */
+  setAxis(x: number, y: number): void {
+    this.axis.set(x, y);
+    if (this.axis.lengthSq() > 1) this.axis.normalize();
+  }
+
+  /** 画面上のボタンの押しっぱなしを入れる */
+  setVirtualKey(key: string, down: boolean): void {
+    if (down) {
+      if (!this.virtualDown.has(key)) this.virtualPressed.add(key);
+      this.virtualDown.add(key);
+    } else {
+      this.virtualDown.delete(key);
+    }
+  }
+
+  /** 画面上のボタンのタップ（押した瞬間だけ）を入れる */
+  pressVirtualKey(key: string): void {
+    this.virtualPressed.add(key);
   }
 
   /** 外部（クリックなど）から確定入力を注入する */
