@@ -10,6 +10,7 @@ export class UI {
   private overlayTitle = document.getElementById('overlayTitle') as HTMLDivElement;
   private overlayText = document.getElementById('overlayText') as HTMLDivElement;
   private overlayAction = document.getElementById('overlayAction') as HTMLButtonElement;
+  private visionLabel = document.getElementById('visionLabel') as HTMLDivElement;
 
   private speechTimer = 0;
   private screenPos = new THREE.Vector3();
@@ -58,6 +59,13 @@ export class UI {
 
   setRewinding(on: boolean): void {
     this.stage.classList.toggle('rewinding', on);
+  }
+
+  /** 未来視。画面から色を抜いて、いま何を見ているかを上に出す */
+  setVision(on: boolean, caption = ''): void {
+    this.stage.classList.toggle('vision', on);
+    this.visionLabel.classList.toggle('show', on);
+    if (on && this.visionLabel.textContent !== caption) this.visionLabel.textContent = caption;
   }
 
   showOverlay(opts: { title?: string; text?: string; action?: string; mode?: 'dim' | 'dark' | 'black' }): void {

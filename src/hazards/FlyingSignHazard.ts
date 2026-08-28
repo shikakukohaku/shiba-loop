@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config';
 import { SIGN_ORIGIN } from '../world/World';
-import type { Hazard, HazardContext } from './Hazard';
+import type { Advice, Hazard, HazardContext } from './Hazard';
 import type { Owner } from '../entities/Owner';
 
-type Phase = 'armed' | 'flying' | 'falling' | 'landed' | 'spent';
+type Phase = 'armed' | 'waiting' | 'flying' | 'falling' | 'landed' | 'spent';
 
 interface SignSnapshot {
   phase: Phase;
@@ -12,23 +12,30 @@ interface SignSnapshot {
   vx: number; vy: number; vz: number;
   rx: number; ry: number; rz: number;
   age: number;
+  warn: number;
+  hitDone: boolean;
   nearMissDone: boolean;
 }
 
-/** 工事現場から吹き飛んでくる看板。飼い主の頭の高さを通る。 */
+/** 事故1: 工事現場から吹き飛んでくる看板。飼い主の頭の高さを通る。 */
 export class FlyingSignHazard implements Hazard {
   readonly name = 'flying-sign';
+  readonly label = '飛来する看板';
+  readonly advice: Advice = 'crouch';
+  readonly nearMissLine = 'うわ、なんか飛んでったな';
   readonly root = new THREE.Group();
 
-  triggerTime = CONFIG.hazardTriggerTime;
+  triggerX = 3.3;
+  readonly dangerX = 8;
 
   private mesh: THREE.Group;
-  private hitBox: THREE.Mesh; // デバッグ表示用の当たり判定
+  private hitBox: THREE.Mesh;
   private phase: Phase = 'armed';
   private velocity = new THREE.Vector3();
   private age = 0;
+  private warn = 0;
+  private hitDone = false;
   private nearMissDone = false;
-  private prev = new THREE.Vector3();
 
   constructor() {
     this.mesh = new THREE.Group();
@@ -72,6 +79,8 @@ export class FlyingSignHazard implements Hazard {
   reset(): void {
     this.phase = 'armed';
     this.age = 0;
+    this.warn = 0;
+    this.hitDone = false;
     this.nearMissDone = false;
     this.velocity.set(0, 0, 0);
     this.mesh.visible = false;
@@ -86,7 +95,15 @@ export class FlyingSignHazard implements Hazard {
 
   update(dt: number, ctx: HazardContext): void {
     if (this.phase === 'armed') {
-      if (ctx.time >= this.triggerTime) this.launch(ctx.owner);
+      if (ctx.owner.position.x >= this.triggerX) {
+        this.phase = 'waiting';
+        this.warn = CONFIG.signWarnDelay;
+      }
+      return;
+    }
+    if (this.phase === 'waiting') {
+      this.warn -= dt;
+      if (this.warn <= 0) this.launch(ctx.owner);
       return;
     }
     if (this.phase === 'falling') {
@@ -96,7 +113,6 @@ export class FlyingSignHazard implements Hazard {
     if (this.phase !== 'flying') return;
 
     this.age += dt;
-    this.prev.copy(this.mesh.position);
 
     // 速いので、当たり判定は細かく刻んでから進める（すり抜け防止）
     const travel = this.velocity.length() * dt;
@@ -107,19 +123,17 @@ export class FlyingSignHazard implements Hazard {
       if (this.checkHit(ctx)) return;
     }
 
-    // 木の葉のように回りながら飛ぶ
     this.mesh.rotation.x += dt * 5.5;
     this.mesh.rotation.z += dt * 2.3;
 
-    // 地面に達したら転がって止まる（空中に置き去りにしない）
     if (this.mesh.position.y <= 0.06) {
       this.phase = 'falling';
       this.velocity.multiplyScalar(0.35);
     }
 
-    if (!this.nearMissDone && this.passedOwner(ctx.owner)) {
+    if (!this.nearMissDone && !this.hitDone && this.passedOwner(ctx.owner)) {
       this.nearMissDone = true;
-      ctx.onNearMiss();
+      ctx.onNearMiss(this);
     }
 
     if (this.age > CONFIG.signLifetime) {
@@ -128,27 +142,11 @@ export class FlyingSignHazard implements Hazard {
     }
   }
 
-  /** 落ちて地面に転がる */
-  private fall(dt: number): void {
-    this.age += dt;
-    this.velocity.y -= 20 * dt;
-    this.mesh.position.addScaledVector(this.velocity, dt);
-    this.mesh.rotation.x += dt * 3.2;
-    if (this.mesh.position.y <= 0.06) {
-      this.mesh.position.y = 0.06;
-      this.mesh.rotation.set(0, this.mesh.rotation.y, 0.1);
-      this.velocity.set(0, 0, 0);
-      this.phase = 'landed';
-    }
-  }
-
   private launch(owner: Owner): void {
     this.phase = 'flying';
     this.age = 0;
-    this.nearMissDone = false;
     this.mesh.visible = true;
     this.mesh.position.copy(SIGN_ORIGIN);
-    this.prev.copy(SIGN_ORIGIN);
 
     // 「今の速度で歩き続けたら居るはずの場所」を狙う。
     // だから足を止めさせても、しゃがませても外れる。
@@ -162,7 +160,6 @@ export class FlyingSignHazard implements Hazard {
     if (owner.state === 'WALKING') {
       vel.set(Math.sin(owner.facing), 0, Math.cos(owner.facing)).multiplyScalar(CONFIG.ownerSpeed);
     }
-    // 立っている前提の頭の高さを狙う → しゃがめば頭上を抜ける
     const target = new THREE.Vector3(owner.position.x, CONFIG.ownerHeadHeight - 0.04, owner.position.z);
     let t = target.distanceTo(SIGN_ORIGIN) / CONFIG.signSpeed;
     for (let i = 0; i < 3; i++) {
@@ -178,7 +175,7 @@ export class FlyingSignHazard implements Hazard {
 
   private checkHit(ctx: HazardContext): boolean {
     const owner = ctx.owner;
-    if (owner.state === 'DEAD') return false;
+    if (this.hitDone || owner.state === 'DEAD') return false;
 
     // 飼い主を「腰から頭まで」のカプセルとみなす
     const top = owner.headHeight;
@@ -189,13 +186,28 @@ export class FlyingSignHazard implements Hazard {
       new THREE.Vector3(owner.position.x, top, owner.position.z),
     );
     if (d < CONFIG.signHitRadius + CONFIG.ownerHitRadius) {
+      this.hitDone = true;
       this.phase = 'falling';
       this.velocity.multiplyScalar(0.22);
       this.velocity.y = 1.4;
-      ctx.onOwnerHit();
+      ctx.onOwnerHit(this);
       return true;
     }
     return false;
+  }
+
+  /** 落ちて地面に転がる */
+  private fall(dt: number): void {
+    this.age += dt;
+    this.velocity.y -= 20 * dt;
+    this.mesh.position.addScaledVector(this.velocity, dt);
+    this.mesh.rotation.x += dt * 3.2;
+    if (this.mesh.position.y <= 0.06) {
+      this.mesh.position.y = 0.06;
+      this.mesh.rotation.set(0, this.mesh.rotation.y, 0.1);
+      this.velocity.set(0, 0, 0);
+      this.phase = 'landed';
+    }
   }
 
   /** 飼い主の横を通り過ぎたか（当たらずに抜けた瞬間） */
@@ -215,6 +227,8 @@ export class FlyingSignHazard implements Hazard {
       vx: this.velocity.x, vy: this.velocity.y, vz: this.velocity.z,
       rx: this.mesh.rotation.x, ry: this.mesh.rotation.y, rz: this.mesh.rotation.z,
       age: this.age,
+      warn: this.warn,
+      hitDone: this.hitDone,
       nearMissDone: this.nearMissDone,
     };
   }
@@ -226,6 +240,8 @@ export class FlyingSignHazard implements Hazard {
     this.velocity.set(snap.vx, snap.vy, snap.vz);
     this.mesh.rotation.set(snap.rx, snap.ry, snap.rz);
     this.age = snap.age;
+    this.warn = snap.warn;
+    this.hitDone = snap.hitDone;
     this.nearMissDone = snap.nearMissDone;
     this.mesh.visible = snap.phase === 'flying' || snap.phase === 'falling' || snap.phase === 'landed';
   }

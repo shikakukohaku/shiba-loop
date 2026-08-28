@@ -9,8 +9,12 @@ import { Leash } from './systems/Leash';
 import { CameraRig } from './systems/CameraRig';
 import { History } from './systems/History';
 import { FlyingSignHazard } from './hazards/FlyingSignHazard';
-import type { Hazard, HazardContext } from './hazards/Hazard';
-import { World, OWNER_WAYPOINTS, OWNER_START, DOG_START, WRAITH_SPOT } from './world/World';
+import { FallingObjectHazard } from './hazards/FallingObjectHazard';
+import { ManholeHazard } from './hazards/ManholeHazard';
+import { BicycleHazard } from './hazards/BicycleHazard';
+import type { Advice, Hazard, HazardContext } from './hazards/Hazard';
+import { DangerMarker } from './world/DangerMarker';
+import { World, OWNER_WAYPOINTS, OWNER_START, DOG_START, WRAITH_SPOT, GOAL_X } from './world/World';
 import { UI } from './ui/UI';
 
 export type GameState =
@@ -18,14 +22,17 @@ export type GameState =
   | 'PLAYING_FIRST_LOOP'
   | 'OWNER_DEAD'
   | 'REWINDING'
-  | 'PLAYING_SECOND_LOOP'
+  | 'PRECOGNITION'
+  | 'PLAYING_LOOP'
   | 'CLEAR';
 
 const INTRO_DURATION = 1.4;
-const DEAD_PROMPT_DELAY = 2.6;   // 死んでから「巻き戻す」を出すまで
-const WRAITH_NEAR_DISTANCE = 2.6; // 犬が飼い主に近付いたと見なす距離
-const SUCCESS_DELAY = 1.2;        // 回避してから成功シーケンスに入るまで
-const SPEECH_COOLDOWN = 3.5;
+const FIRST_DEAD_PROMPT_DELAY = 2.6; // 初回だけ、怪異を見せてから巻き戻しを出す
+const RETRY_PROMPT_DELAY = 1.0;      // 2回目以降はすぐ出す
+const WRAITH_NEAR_DISTANCE = 2.6;
+const SPEECH_COOLDOWN = 3.2;
+const HINT_DISTANCE = 9;   // 事故の何メートル手前からヒントを出すか
+const MARKER_FADE_IN = 14; // 危険マーカーが濃くなり始める距離
 
 /** 操作説明はキーボードとタッチで文言を変える */
 const TEXT = {
@@ -45,7 +52,25 @@ const TEXT = {
     key: 'E：抱っこをせがむ',
     touch: '「抱っこ」を押す',
   },
+  skip: {
+    key: 'Enter：スキップ',
+    touch: 'タップでスキップ',
+  },
 } as const;
+
+/** 事故ごとの避け方を、そのまま画面に出す文言にする */
+const ADVICE_TEXT: Record<Advice, { key: string; touch: string }> = {
+  crouch: { key: 'E：抱っこをせがんでしゃがませる', touch: '「抱っこ」でしゃがませる' },
+  stop: { key: 'Space：拒否柴で足を止める', touch: '「拒否柴」で足を止める' },
+  pull: { key: 'リードを張って横へ引っ張る', touch: 'リードを張って横へ引っ張る' },
+};
+
+interface VisionReturn {
+  loopTime: number;
+  dog: ReturnType<Dog['capture']>;
+  owner: ReturnType<Owner['capture']>;
+  hazards: unknown[];
+}
 
 export class Game {
   private renderer: THREE.WebGLRenderer;
@@ -62,8 +87,14 @@ export class Game {
   private touch: Touch;
   private ui: UI;
 
-  private sign = new FlyingSignHazard();
-  private hazards: Hazard[] = [];
+  /** x の小さい順に並べる。ヒントと未来視がこの順に依存している */
+  private hazards: Hazard[] = [
+    new FlyingSignHazard(),
+    new FallingObjectHazard(),
+    new ManholeHazard(),
+    new BicycleHazard(),
+  ];
+  private markers = new Map<string, DangerMarker>();
 
   private history = new History(CONFIG.rewindSeconds + 4);
 
@@ -76,15 +107,22 @@ export class Game {
   private rewindTo = 0;
   private debugVisible = false;
   private speechCooldown = 0;
-  private avoided = false;
   private successPhase = 0;
+  private reachedGoal = false;
   private wraithShown = false;
-  private hugPromptShown = false;
   private huggedThisLoop = false;
+  private deaths = 0;
+
+  // 未来視
+  private visionDone = false;
+  private visionFreeze = 0;
+  private visionCaption = '';
+  private visionReturn: VisionReturn | null = null;
 
   private clock = new THREE.Clock();
   private anchor = new THREE.Vector3();
   private moveDir = new THREE.Vector3();
+  private zeroMove = new THREE.Vector2();
 
   constructor(container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -104,11 +142,11 @@ export class Game {
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1024, 1024);
     const sc = this.sun.shadow.camera;
-    sc.left = -14; sc.right = 14; sc.top = 14; sc.bottom = -14; sc.near = 1; sc.far = 60;
+    sc.left = -14; sc.right = 14; sc.top = 16; sc.bottom = -14; sc.near = 1; sc.far = 60;
     this.scene.add(this.sun, this.sun.target);
 
-    this.hazards = [this.sign];
-    this.scene.add(this.world.root, this.dog.root, this.owner.root, this.wraith.root, this.leash.root, this.sign.root);
+    this.scene.add(this.world.root, this.dog.root, this.owner.root, this.wraith.root, this.leash.root);
+    for (const h of this.hazards) this.scene.add(h.root);
 
     this.rig = new CameraRig(innerWidth / innerHeight);
     this.ui = new UI(() => this.input.injectConfirm());
@@ -131,15 +169,21 @@ export class Game {
   resetAll(): void {
     this.state = 'INTRO';
     this.loop = 1;
+    this.deaths = 0;
     this.loopTime = 0;
     this.stateTime = 0;
     this.hitPause = 0;
-    this.avoided = false;
     this.successPhase = 0;
+    this.reachedGoal = false;
     this.wraithShown = false;
-    this.hugPromptShown = false;
     this.huggedThisLoop = false;
     this.speechCooldown = 0;
+    this.visionDone = false;
+    this.visionFreeze = 0;
+    this.visionReturn = null;
+
+    for (const m of this.markers.values()) this.scene.remove(m.root);
+    this.markers.clear();
 
     this.dog.restore({
       x: DOG_START.x, z: DOG_START.z, facing: Math.PI / 2,
@@ -149,7 +193,7 @@ export class Game {
     this.owner.restore({
       x: OWNER_START.x, z: OWNER_START.z, facing: Math.PI / 2,
       state: 'WALKING', crouchTimer: 0, stopTimer: 0, waypointIndex: 0,
-      crouchBlend: 0, deathBlend: 0, walkPhase: 0,
+      crouchBlend: 0, deathBlend: 0, walkPhase: 0, sinking: false, sinkBlend: 0,
     });
     for (const h of this.hazards) h.reset();
     this.wraith.hide();
@@ -162,6 +206,7 @@ export class Game {
     this.ui.hideOverlay();
     this.ui.clearSpeech();
     this.ui.setRewinding(false);
+    this.ui.setVision(false);
     this.ui.showHint(this.text('move'));
   }
 
@@ -170,19 +215,33 @@ export class Game {
     return this.touch.enabled ? TEXT[key].touch : TEXT[key].key;
   }
 
+  private adviceText(advice: Advice): string {
+    return this.touch.enabled ? ADVICE_TEXT[advice].touch : ADVICE_TEXT[advice].key;
+  }
+
   private hazardContext(): HazardContext {
     return {
       owner: this.owner,
       dog: this.dog,
       time: this.loopTime,
-      onOwnerHit: () => this.onOwnerHit(),
-      onNearMiss: () => this.onNearMiss(),
+      vision: this.state === 'PRECOGNITION',
+      onOwnerHit: (h) => this.onOwnerHit(h),
+      onNearMiss: (h) => this.onNearMiss(h),
     };
   }
 
-  private onOwnerHit(): void {
+  private onOwnerHit(hazard: Hazard): void {
+    // 未来視では死なない。「ここで死ぬ」という印だけ残す
+    if (this.state === 'PRECOGNITION') {
+      this.addMarker(hazard);
+      this.visionFreeze = CONFIG.visionFreezeDuration;
+      this.visionCaption = hazard.label;
+      return;
+    }
     if (this.owner.state === 'DEAD') return;
-    this.owner.kill();
+
+    this.owner.kill(hazard.name === 'manhole');
+    this.deaths++;
     this.state = 'OWNER_DEAD';
     this.stateTime = 0;
     this.hitPause = CONFIG.deathPauseDuration;
@@ -192,16 +251,27 @@ export class Game {
     this.ui.hideHint();
   }
 
-  private onNearMiss(): void {
-    if (this.owner.state === 'DEAD') return;
+  private onNearMiss(hazard: Hazard): void {
+    if (this.state === 'PRECOGNITION' || this.owner.state === 'DEAD') return;
     this.rig.shake(0.12);
-    this.say('うわ、なんか飛んでったな', 2.2, true);
+    this.say(hazard.nearMissLine, 2.2, true);
+  }
+
+  private addMarker(hazard: Hazard): void {
+    if (this.markers.has(hazard.name)) return;
+    const marker = new DangerMarker(this.owner.position);
+    this.markers.set(hazard.name, marker);
+    this.scene.add(marker.root);
   }
 
   private say(text: string, seconds = 2.4, force = false): void {
     if (!force && this.speechCooldown > 0) return;
     this.ui.say(text, seconds);
     this.speechCooldown = SPEECH_COOLDOWN;
+  }
+
+  private get playing(): boolean {
+    return this.state === 'PLAYING_FIRST_LOOP' || this.state === 'PLAYING_LOOP';
   }
 
   // --- ループ -----------------------------------------------------------
@@ -224,7 +294,7 @@ export class Game {
 
     switch (this.state) {
       case 'INTRO':
-        this.simulate(dt, false);
+        this.simulate(dt, false, true);
         if (this.stateTime > INTRO_DURATION) {
           this.state = 'PLAYING_FIRST_LOOP';
           this.stateTime = 0;
@@ -233,7 +303,7 @@ export class Game {
         }
         break;
       case 'PLAYING_FIRST_LOOP':
-      case 'PLAYING_SECOND_LOOP':
+      case 'PLAYING_LOOP':
         this.updatePlaying(dt);
         break;
       case 'OWNER_DEAD':
@@ -242,15 +312,24 @@ export class Game {
       case 'REWINDING':
         this.updateRewind(dt);
         break;
+      case 'PRECOGNITION':
+        this.updateVision(dt);
+        break;
       case 'CLEAR':
-        this.updateClear(dt);
+        this.updateClear();
         break;
       default:
         break;
     }
 
     this.wraith.update(dt, this.dog.position);
-    this.rig.update(dt, this.dog.position, this.owner.position);
+    this.updateMarkers(dt);
+
+    if (this.state === 'PRECOGNITION') {
+      this.rig.snapTo(this.owner.position, this.owner.position);
+    } else {
+      this.rig.update(dt, this.dog.position, this.owner.position);
+    }
     this.updateSun();
 
     this.anchor.set(this.owner.position.x, this.owner.headHeight + 0.5, this.owner.position.z);
@@ -268,16 +347,29 @@ export class Game {
     this.sun.target.updateMatrixWorld();
   }
 
-  /** 犬・飼い主・リード・事故を1フレーム進める */
-  private simulate(dt: number, hazardsActive: boolean): void {
-    const { right, forward } = this.rig.getGroundBasis();
-    this.moveDir.set(0, 0, 0)
-      .addScaledVector(right, this.input.move.x)
-      .addScaledVector(forward, -this.input.move.y);
-    const move = new THREE.Vector2(this.moveDir.x, this.moveDir.z);
-    if (move.lengthSq() > 1) move.normalize();
+  private updateMarkers(dt: number): void {
+    for (const h of this.hazards) {
+      const m = this.markers.get(h.name);
+      if (!m) continue;
+      const ahead = h.dangerX - this.owner.position.x;
+      const proximity = THREE.MathUtils.clamp(1 - ahead / MARKER_FADE_IN, 0, 1);
+      m.update(dt, ahead < -3 ? 0.15 : proximity);
+    }
+  }
 
-    const bracing = this.input.isDown('brace') && this.owner.state !== 'DEAD';
+  /** 犬・飼い主・リード・事故を1フレーム進める */
+  private simulate(dt: number, hazardsActive: boolean, playerControlled: boolean): void {
+    let move = this.zeroMove.set(0, 0);
+    if (playerControlled) {
+      const { right, forward } = this.rig.getGroundBasis();
+      this.moveDir.set(0, 0, 0)
+        .addScaledVector(right, this.input.move.x)
+        .addScaledVector(forward, -this.input.move.y);
+      move = new THREE.Vector2(this.moveDir.x, this.moveDir.z);
+      if (move.lengthSq() > 1) move.normalize();
+    }
+
+    const bracing = playerControlled && this.input.isDown('brace') && this.owner.state !== 'DEAD';
     this.dog.update(dt, move, bracing);
 
     // リードが張った状態で踏ん張ると、飼い主の足が止まる
@@ -294,8 +386,10 @@ export class Game {
       for (const h of this.hazards) h.update(dt, ctx);
     }
 
-    if (bracing && leash.taut) this.say('こら、どうした。行くぞー');
-    else if (leash.pulled > 0.004) this.say('引っ張るなって');
+    if (playerControlled && this.owner.state !== 'DEAD') {
+      if (bracing && leash.taut) this.say('こら、どうした。行くぞー');
+      else if (leash.pulled > 0.004) this.say('引っ張るなって');
+    }
   }
 
   private updatePlaying(dt: number): void {
@@ -304,28 +398,27 @@ export class Game {
       return;
     }
     this.loopTime += dt;
-    this.simulate(dt, true);
+    this.simulate(dt, true, true);
     this.recordFrame();
 
-    // 抱っこ
     if (this.input.wasPressed('hug')) this.tryHug();
-
     this.updatePlayingHints();
 
-    // 事故をやり過ごせたか
-    if (!this.avoided && this.owner.state !== 'DEAD' && this.loopTime > this.sign.triggerTime + SUCCESS_DELAY) {
-      this.avoided = true;
+    if (!this.reachedGoal && this.owner.position.x >= GOAL_X && this.owner.state !== 'DEAD') {
+      this.reachedGoal = true;
       this.successPhase = 0;
       this.stateTime = 0;
+      this.owner.stopFor(60);
+      this.ui.hideHint();
     }
-    if (this.avoided) this.updateSuccess();
+    if (this.reachedGoal) this.updateSuccess();
   }
 
   private tryHug(): void {
     if (this.owner.state === 'DEAD' || this.owner.state === 'CROUCHING') return;
     const d = Math.hypot(this.dog.position.x - this.owner.position.x, this.dog.position.z - this.owner.position.z);
     if (d > CONFIG.hugRange) {
-      this.ui.showHint('抱っこをせがむには、もっと飼い主に近づく', true);
+      this.ui.showHint(this.text('hugFar'), true);
       return;
     }
     this.owner.crouch();
@@ -335,38 +428,72 @@ export class Game {
     this.ui.hideHint();
   }
 
+  /** まだ通り過ぎていない、いちばん手前の事故 */
+  private nextHazard(): Hazard | null {
+    for (const h of this.hazards) {
+      if (this.owner.position.x < h.dangerX + 2.5) return h;
+    }
+    return null;
+  }
+
   private updatePlayingHints(): void {
-    if (this.avoided) return;
-    const toHazard = this.sign.triggerTime - this.loopTime;
+    if (this.reachedGoal) return;
+    const next = this.nextHazard();
+
+    // 1周目はまだ何も知らない。基本操作だけ出す
+    if (this.state === 'PLAYING_FIRST_LOOP') {
+      if (this.loopTime > 3 && this.loopTime < 6.5) this.ui.showHint(this.text('brace'));
+      else if (this.loopTime >= 6.5) this.ui.hideHint();
+      return;
+    }
 
     if (this.owner.state === 'CROUCHING') {
       this.ui.hideHint();
-    } else if (this.state === 'PLAYING_SECOND_LOOP' && toHazard < 3.2 && toHazard > -0.6) {
-      const d = Math.hypot(this.dog.position.x - this.owner.position.x, this.dog.position.z - this.owner.position.z);
-      this.ui.showHint(this.text(d > CONFIG.hugRange ? 'hugFar' : 'hug'), true);
-      this.hugPromptShown = true;
-    } else if (this.hugPromptShown && toHazard <= -0.6) {
-      this.ui.hideHint();
-    } else if (this.state === 'PLAYING_FIRST_LOOP' && this.loopTime > 3 && this.loopTime < 6) {
-      this.ui.showHint(this.text('brace'));
-    } else if (this.state === 'PLAYING_FIRST_LOOP' && this.loopTime >= 6) {
-      this.ui.hideHint();
+      return;
     }
+    if (!next) {
+      this.ui.hideHint();
+      return;
+    }
+
+    const ahead = next.dangerX - this.owner.position.x;
+    if (ahead > HINT_DISTANCE) {
+      this.ui.hideHint();
+      return;
+    }
+
+    // 未来視で見た事故だけヒントを出す（見ていないものは自分で気づく）
+    if (!this.markers.has(next.name)) {
+      this.ui.hideHint();
+      return;
+    }
+
+    let advice = this.adviceText(next.advice);
+    if (next.advice === 'crouch') {
+      const d = Math.hypot(
+        this.dog.position.x - this.owner.position.x,
+        this.dog.position.z - this.owner.position.z,
+      );
+      if (d > CONFIG.hugRange) advice = this.text('hugFar');
+    }
+    this.ui.showHint(`${next.label} — ${advice}`, ahead < 4);
   }
 
-  /** 事故を避けたあとの流れ。飼い主は何も分かっていない。 */
+  /** 家に着いたあとの流れ。飼い主は何も分かっていない。 */
   private updateSuccess(): void {
     const t = this.stateTime;
-    // 「うわ、なんか飛んでったな」を言い終わるまで待ってから次の台詞に移る
-    if (this.successPhase === 0 && this.owner.state !== 'CROUCHING' && t > 1.6) {
+    if (this.successPhase === 0 && this.owner.state !== 'CROUCHING' && t > 1.0) {
       this.successPhase = 1;
-      this.say(this.huggedThisLoop ? '今日は甘えん坊だな' : 'なんだったんだ、今の', 2.6, true);
+      this.say(this.huggedThisLoop ? '今日は甘えん坊だったな' : '今日はやけに落ち着かなかったな', 2.8, true);
     }
-    if (this.successPhase === 1 && t > 3.0) {
+    if (this.successPhase === 1 && t > 3.6) {
       this.successPhase = 2;
-      this.wraith.show(WRAITH_SPOT, this.dog.position);
+      this.wraith.show(
+        new THREE.Vector3(this.owner.position.x - 9, 0, -6.5),
+        this.dog.position,
+      );
     }
-    if (this.successPhase === 2 && t > 6.4) {
+    if (this.successPhase === 2 && t > 7.0) {
       this.successPhase = 3;
       this.state = 'CLEAR';
       this.stateTime = 0;
@@ -382,23 +509,25 @@ export class Game {
       return;
     }
     // 飼い主は倒れたが、犬はまだ動ける
-    this.simulate(dt, true);
+    this.simulate(dt, true, true);
     this.loopTime += dt;
 
-    const nearOwner = Math.hypot(
-      this.dog.position.x - this.owner.position.x,
-      this.dog.position.z - this.owner.position.z,
-    ) < WRAITH_NEAR_DISTANCE;
-
-    if (!this.wraithShown && (nearOwner || this.stateTime > 3.4) && this.stateTime > 1.2) {
-      this.wraithShown = true;
-      this.wraith.show(WRAITH_SPOT, this.dog.position);
+    const first = this.deaths === 1;
+    if (first) {
+      const nearOwner = Math.hypot(
+        this.dog.position.x - this.owner.position.x,
+        this.dog.position.z - this.owner.position.z,
+      ) < WRAITH_NEAR_DISTANCE;
+      if (!this.wraithShown && (nearOwner || this.stateTime > 3.4) && this.stateTime > 1.2) {
+        this.wraithShown = true;
+        this.wraith.show(WRAITH_SPOT, this.dog.position);
+      }
     }
 
-    if (this.stateTime > DEAD_PROMPT_DELAY) {
+    if (this.stateTime > (first ? FIRST_DEAD_PROMPT_DELAY : RETRY_PROMPT_DELAY)) {
       this.dog.gemActive = true;
       this.ui.showOverlay({
-        text: '首輪のアイテムが光っている。',
+        text: first ? '首輪のアイテムが光っている。' : '',
         action: '時間を巻き戻す',
         mode: 'dim',
       });
@@ -435,33 +564,108 @@ export class Game {
       for (let i = 0; i < this.hazards.length; i++) this.hazards[i].restore(frame.hazards[i]);
       this.leash.apply(this.dog, this.owner, dt);
     }
-    void dt;
 
     if (p >= 1) {
       this.loopTime = this.rewindTo;
       this.loop += 1;
-      this.state = 'PLAYING_SECOND_LOOP';
       this.stateTime = 0;
-      this.avoided = false;
+      this.reachedGoal = false;
       this.successPhase = 0;
-      this.hugPromptShown = false;
       this.huggedThisLoop = false;
       this.dog.gemActive = false;
       this.history.clear();
       this.ui.setRewinding(false);
       this.rig.setZoom(1);
-      this.say('……', 0.8, true);
+
+      // 初回の巻き戻しのあとだけ、首輪のアイテムが未来を見せてくる
+      if (!this.visionDone) this.beginVision();
+      else {
+        this.state = 'PLAYING_LOOP';
+        this.say('……', 0.8, true);
+      }
     }
   }
 
-  private updateClear(dt: number): void {
-    void dt;
+  // --- 未来視 -----------------------------------------------------------
+
+  /**
+   * 犬にだけ見える、この先の散歩。
+   * 別のカットシーンを作らず、本物のシミュレーションを早送りで流して見せる。
+   * 飼い主は死なず、事故に当たった場所に印だけが残る。
+   */
+  private beginVision(): void {
+    this.visionReturn = {
+      loopTime: this.loopTime,
+      dog: this.dog.capture(),
+      owner: this.owner.capture(),
+      hazards: this.hazards.map((h) => h.snapshot()),
+    };
+    this.state = 'PRECOGNITION';
+    this.stateTime = 0;
+    this.visionFreeze = 0;
+    this.visionCaption = '';
+    this.dog.gemActive = true;
+    this.ui.setVision(true, '未来視');
+    this.ui.showHint(this.text('skip'));
+    this.rig.setZoom(CONFIG.visionZoom);
+  }
+
+  private updateVision(dt: number): void {
+    if (this.input.wasPressed('confirm') && this.stateTime > 0.6) {
+      this.endVision();
+      return;
+    }
+
+    if (this.visionFreeze > 0) {
+      this.visionFreeze -= dt;
+      this.ui.setVision(true, `未来視 — ${this.visionCaption}`);
+      return;
+    }
+    this.ui.setVision(true, '未来視');
+
+    // 早送り。当たり判定を飛ばさないよう細かく刻む
+    let remaining = dt * CONFIG.visionSpeed;
+    while (remaining > 0) {
+      const step = Math.min(remaining, 1 / 60);
+      this.loopTime += step;
+      this.simulate(step, true, false);
+      remaining -= step;
+      if (this.visionFreeze > 0) return;
+    }
+
+    const sawEverything = this.markers.size >= this.hazards.length;
+    if (sawEverything || this.owner.position.x >= GOAL_X) this.endVision();
+  }
+
+  private endVision(): void {
+    const back = this.visionReturn;
+    this.visionDone = true;
+    if (back) {
+      this.loopTime = back.loopTime;
+      this.dog.restore(back.dog);
+      this.owner.restore(back.owner);
+      for (let i = 0; i < this.hazards.length; i++) this.hazards[i].restore(back.hazards[i]);
+      this.leash.apply(this.dog, this.owner, 0);
+    }
+    this.visionReturn = null;
+    this.history.clear();
+    this.dog.gemActive = false;
+    this.ui.setVision(false);
+    this.ui.hideHint();
+    this.rig.setZoom(1);
+    this.rig.snapTo(this.dog.position, this.owner.position);
+    this.state = 'PLAYING_LOOP';
+    this.stateTime = 0;
+    this.say('……この先で、みんな死ぬ', 2.6, true);
+  }
+
+  private updateClear(): void {
     if (this.stateTime > 1.2 && this.stateTime < 4.2) {
       this.ui.showOverlay({ title: 'SHIBA LOOP', mode: 'black' });
     } else if (this.stateTime >= 4.2) {
       this.ui.showOverlay({
         title: 'SHIBA LOOP',
-        text: 'Prototype Clear',
+        text: `Prototype Clear<br>巻き戻した回数: ${this.deaths}`,
         action: 'もう一度あそぶ',
         mode: 'black',
       });
@@ -486,25 +690,30 @@ export class Game {
       this.debugVisible = !this.debugVisible;
       this.world.setDebugVisible(this.debugVisible);
       this.leash.setDebugVisible(this.debugVisible);
-      this.sign.setDebugVisible(this.debugVisible);
+      for (const hz of this.hazards) hz.setDebugVisible(this.debugVisible);
     }
-    if (this.input.wasPressed('t')) this.skipToHazard();
-    if (this.input.wasPressed('g')) this.sign.forceTrigger(this.hazardContext());
+    if (this.input.wasPressed('t')) this.skipToNextHazard();
+    if (this.input.wasPressed('g')) {
+      const next = this.nextHazard();
+      if (next) next.forceTrigger(this.hazardContext());
+    }
   }
 
-  /** 事故の1.5秒前まで早送りする */
-  private skipToHazard(): void {
+  /** 次の事故の少し手前まで早送りする */
+  private skipToNextHazard(): void {
     if (this.state === 'INTRO') {
       this.state = 'PLAYING_FIRST_LOOP';
       this.stateTime = 0;
       this.loopTime = 0;
       this.history.clear();
     }
-    if (this.state !== 'PLAYING_FIRST_LOOP' && this.state !== 'PLAYING_SECOND_LOOP') return;
-    const target = this.sign.triggerTime - 1.5;
+    if (!this.playing) return;
+    const next = this.nextHazard();
+    if (!next) return;
+    const targetX = next.triggerX - 1.5;
     const step = 1 / 60;
     let guard = 0;
-    while (this.loopTime < target && guard++ < 6000) {
+    while (this.owner.position.x < targetX && guard++ < 12000) {
       this.loopTime += step;
       this.owner.setSpeedFactor(1);
       this.owner.update(step);
@@ -518,12 +727,14 @@ export class Game {
 
   private debugText(): string {
     const l = this.leash.state;
+    const next = this.nextHazard();
     return [
       `state : ${this.state}`,
-      `loop  : ${this.loop}`,
+      `loop  : ${this.loop}  deaths: ${this.deaths}`,
       `time  : ${this.loopTime.toFixed(2)}s`,
-      `owner : ${this.owner.state}`,
+      `owner : ${this.owner.state}  x=${this.owner.position.x.toFixed(1)}`,
       `leash : ${l.distance.toFixed(2)} / ${CONFIG.leashLength}${l.taut ? ' [TAUT]' : ''}`,
+      `next  : ${next ? `${next.name} @${next.dangerX.toFixed(1)}` : '-'}`,
     ].join('\n');
   }
 }

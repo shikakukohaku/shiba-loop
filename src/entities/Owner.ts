@@ -15,6 +15,8 @@ export interface OwnerSnapshot {
   crouchBlend: number;
   deathBlend: number;
   walkPhase: number;
+  sinking: boolean;
+  sinkBlend: number;
 }
 
 const C_COAT = 0x4a6fa5;
@@ -39,6 +41,8 @@ export class Owner {
   private waypoints: THREE.Vector2[] = [];
   private crouchBlend = 0;
   private deathBlend = 0;
+  private sinking = false;  // マンホールに落ちた場合は倒れずに沈む
+  private sinkBlend = 0;
   private walkPhase = 0;
   private speedFactor = 1; // 拒否柴などによる減速（毎フレーム外から設定）
 
@@ -82,6 +86,7 @@ export class Owner {
 
   get headHeight(): number {
     const stand = THREE.MathUtils.lerp(CONFIG.ownerHeadHeight, CONFIG.ownerCrouchHeadHeight, this.crouchBlend);
+    if (this.sinking) return stand - CONFIG.manholeSinkDepth * this.sinkBlend;
     return THREE.MathUtils.lerp(stand, 0.35, this.deathBlend);
   }
 
@@ -112,13 +117,16 @@ export class Owner {
     this.stopTimer = Math.max(this.stopTimer, seconds);
   }
 
-  kill(): void {
+  /** sink=true ならその場に沈む（マンホール用） */
+  kill(sink = false): void {
     this.state = 'DEAD';
+    this.sinking = sink;
   }
 
   update(dt: number): void {
     if (this.state === 'DEAD') {
-      this.deathBlend = Math.min(1, this.deathBlend + dt * 2.4);
+      if (this.sinking) this.sinkBlend = Math.min(1, this.sinkBlend + dt * 1.7);
+      else this.deathBlend = Math.min(1, this.deathBlend + dt * 2.4);
       this.applyPose(dt, false);
       return;
     }
@@ -169,6 +177,13 @@ export class Owner {
       this.arms[i].rotation.x = -0.5 * this.crouchBlend + (moving ? Math.sin(this.walkPhase) * 0.3 * s : 0);
     }
 
+    if (this.sinking) {
+      // マンホールに落ちる：倒れずに沈む
+      this.figure.rotation.x = 0;
+      this.figure.position.y = -CONFIG.manholeSinkDepth * ease(this.sinkBlend);
+      return;
+    }
+
     // 倒れる
     this.figure.rotation.x = (Math.PI / 2) * ease(this.deathBlend);
     if (this.deathBlend > 0) this.figure.position.y = -0.42 * this.crouchBlend + 0.1 * (1 - this.deathBlend);
@@ -192,6 +207,8 @@ export class Owner {
       crouchBlend: this.crouchBlend,
       deathBlend: this.deathBlend,
       walkPhase: this.walkPhase,
+      sinking: this.sinking,
+      sinkBlend: this.sinkBlend,
     };
   }
 
@@ -205,6 +222,8 @@ export class Owner {
     this.crouchBlend = s.crouchBlend;
     this.deathBlend = s.deathBlend;
     this.walkPhase = s.walkPhase;
+    this.sinking = s.sinking;
+    this.sinkBlend = s.sinkBlend;
     this.speedFactor = 1;
     this.applyPose(1, false);
     this.sync();

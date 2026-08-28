@@ -58,6 +58,38 @@
         100% { transform: translate(2px, -1px); }
       }
 
+      /* 未来視中：色を抜いて、いま起きていることではないと分かるようにする */
+      #stage.vision {
+        filter: saturate(0.18) contrast(1.12) brightness(0.92);
+      }
+      #stage.vision::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+          repeating-linear-gradient(0deg, rgba(180, 220, 255, 0.07) 0 3px, transparent 3px 7px),
+          radial-gradient(ellipse at center, transparent 42%, rgba(10, 18, 32, 0.6) 100%);
+      }
+      #visionLabel {
+        position: fixed;
+        left: 50%; top: 26px;
+        transform: translateX(-50%);
+        font-size: 17px;
+        letter-spacing: 0.24em;
+        margin-left: 0.24em;
+        color: #cfe4ff;
+        background: rgba(8, 14, 26, 0.55);
+        padding: 8px 20px;
+        border-radius: 999px;
+        border: 1px solid rgba(160, 200, 255, 0.25);
+        opacity: 0;
+        transition: opacity 260ms ease;
+        pointer-events: none;
+        white-space: nowrap;
+      }
+      #visionLabel.show { opacity: 1; }
+
       .hud {
         position: fixed;
         pointer-events: none;
@@ -277,6 +309,7 @@ R / T / G / H : デバッグ</div>
       </div>
     </div>
     <div id="rotateHint">横向きにすると遊びやすい</div>
+    <div id="visionLabel"></div>
 
     <div id="overlay">
       <div id="overlayTitle"></div>
