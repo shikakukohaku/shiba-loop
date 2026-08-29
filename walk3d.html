@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="SHIBA LOOP" />
+    <title>SHIBA LOOP - 散歩プロトタイプ(3D)</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>%F0%9F%90%95</text></svg>" />
+    <style>
+      :root {
+        --ink: #f4efe6;
+        --dim: rgba(244, 239, 230, 0.55);
+        --panel: rgba(12, 14, 20, 0.72);
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #0b0d12;
+        overflow: hidden;
+        overscroll-behavior: none;
+        touch-action: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      body {
+        font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", system-ui, sans-serif;
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+      }
+      #stage { position: fixed; inset: 0; }
+      #stage canvas { display: block; }
+      /* 巻き戻し中だけ画面を歪ませる（色収差風 + 拡大） */
+      #stage.rewinding {
+        filter: hue-rotate(-25deg) saturate(1.6) contrast(1.15);
+        transform: scale(1.02);
+        transition: filter 120ms linear;
+      }
+      #stage.rewinding::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+          repeating-linear-gradient(0deg, rgba(150, 215, 255, 0.16) 0 2px, transparent 2px 5px),
+          radial-gradient(ellipse at center, transparent 38%, rgba(8, 16, 34, 0.72) 100%);
+        animation: jitter 90ms steps(2) infinite;
+      }
+      @keyframes jitter {
+        0%   { transform: translate(0, 0); }
+        50%  { transform: translate(-2px, 1px); }
+        100% { transform: translate(2px, -1px); }
+      }
+
+      /* 未来視中：色を抜いて、いま起きていることではないと分かるようにする */
+      #stage.vision {
+        filter: saturate(0.18) contrast(1.12) brightness(0.92);
+      }
+      #stage.vision::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+          repeating-linear-gradient(0deg, rgba(180, 220, 255, 0.07) 0 3px, transparent 3px 7px),
+          radial-gradient(ellipse at center, transparent 42%, rgba(10, 18, 32, 0.6) 100%);
+      }
+      #visionLabel {
+        position: fixed;
+        left: 50%; top: 26px;
+        transform: translateX(-50%);
+        font-size: 17px;
+        letter-spacing: 0.24em;
+        margin-left: 0.24em;
+        color: #cfe4ff;
+        background: rgba(8, 14, 26, 0.55);
+        padding: 8px 20px;
+        border-radius: 999px;
+        border: 1px solid rgba(160, 200, 255, 0.25);
+        opacity: 0;
+        transition: opacity 260ms ease;
+        pointer-events: none;
+        white-space: nowrap;
+      }
+      #visionLabel.show { opacity: 1; }
+
+      .hud {
+        position: fixed;
+        pointer-events: none;
+        user-select: none;
+      }
+      /* 左上：デバッグ表示 */
+      #debugPanel {
+        top: 10px; left: 12px;
+        font: 12px/1.6 ui-monospace, "SFMono-Regular", Menlo, monospace;
+        color: var(--dim);
+        background: var(--panel);
+        padding: 6px 10px;
+        border-radius: 6px;
+        white-space: pre;
+      }
+      /* 右上：操作一覧 */
+      #keyPanel {
+        top: 10px; right: 12px;
+        font: 11px/1.7 ui-monospace, Menlo, monospace;
+        color: var(--dim);
+        background: var(--panel);
+        padding: 6px 10px;
+        border-radius: 6px;
+        text-align: right;
+        white-space: pre;
+      }
+      /* 中央下：今やること */
+      #hint {
+        bottom: 46px; left: 50%;
+        transform: translateX(-50%);
+        font-size: 15px;
+        letter-spacing: 0.04em;
+        background: var(--panel);
+        padding: 9px 18px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        opacity: 0;
+        transition: opacity 220ms ease;
+      }
+      #hint.show { opacity: 1; }
+      #hint.urgent {
+        border-color: rgba(255, 214, 120, 0.9);
+        color: #ffd678;
+        animation: pulse 900ms ease-in-out infinite;
+      }
+      @keyframes pulse { 0%, 100% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(1.05); } }
+
+      /* 飼い主のセリフ（3D座標に貼り付ける） */
+      #speech {
+        position: fixed;
+        transform: translate(-50%, -100%);
+        background: rgba(250, 250, 252, 0.94);
+        color: #14161c;
+        font-size: 14px;
+        padding: 7px 13px;
+        border-radius: 12px;
+        white-space: nowrap;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 160ms ease;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+      }
+      #speech::after {
+        content: "";
+        position: absolute;
+        left: 50%; bottom: -7px;
+        margin-left: -6px;
+        border: 6px solid transparent;
+        border-top-color: rgba(250, 250, 252, 0.94);
+        border-bottom: 0;
+      }
+      #speech.show { opacity: 1; }
+
+      /* 全画面オーバーレイ（巻き戻し確認・タイトル） */
+      #overlay {
+        position: fixed; inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: rgba(6, 7, 11, 0);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 500ms ease, background 500ms ease;
+        text-align: center;
+      }
+      /* 覆っても入力は通す。押せるのはボタンだけ（タッチで犬が動かせなくなるのを防ぐ） */
+      #overlay.show { opacity: 1; pointer-events: none; }
+      #overlayAction { pointer-events: auto; }
+      #overlay.dark { background: rgba(6, 7, 11, 0.86); }
+      #overlay.black { background: #06070b; }
+      #overlayTitle {
+        font-size: 40px;
+        letter-spacing: 0.34em;
+        margin-left: 0.34em;
+        font-weight: 300;
+      }
+      #overlayText { font-size: 15px; color: var(--dim); line-height: 1.9; }
+      #overlayAction {
+        margin-top: 6px;
+        font-family: inherit;
+        -webkit-tap-highlight-color: transparent;
+        font-size: 16px;
+        color: #ffd678;
+        border: 1px solid rgba(255, 214, 120, 0.6);
+        border-radius: 999px;
+        padding: 10px 24px;
+        cursor: pointer;
+        background: rgba(255, 214, 120, 0.06);
+        animation: pulse2 1.4s ease-in-out infinite;
+      }
+      @keyframes pulse2 { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
+      #overlayAction:hover { background: rgba(255, 214, 120, 0.16); }
+      .hidden { display: none !important; }
+
+      /* --- タッチ操作（body.touch のときだけ出す） --- */
+      #touch { position: fixed; inset: 0; pointer-events: none; display: none; }
+      body.touch #touch { display: block; }
+      body.touch #keyPanel { display: none; }
+      body.touch #debugPanel { font-size: 10px; opacity: 0.7; }
+
+      #stickZone {
+        position: absolute;
+        left: 0; top: 0;
+        width: 46%; height: 100%;
+        pointer-events: auto;
+        touch-action: none;
+      }
+      #stickBase {
+        position: absolute;
+        width: 132px; height: 132px;
+        margin: -66px 0 0 -66px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.28);
+        background: rgba(255, 255, 255, 0.07);
+        opacity: 0;
+        transition: opacity 120ms ease;
+      }
+      #stickBase.show { opacity: 1; }
+      #stickKnob {
+        position: absolute;
+        left: 50%; top: 50%;
+        width: 58px; height: 58px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.72);
+        transform: translate(-50%, -50%);
+      }
+
+      #touchButtons {
+        position: absolute;
+        right: calc(24px + env(safe-area-inset-right));
+        bottom: calc(30px + env(safe-area-inset-bottom));
+        display: flex;
+        gap: 16px;
+        pointer-events: none;
+      }
+      #touchButtons button {
+        pointer-events: auto;
+        touch-action: none;
+        width: 104px; height: 104px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.35);
+        background: rgba(20, 24, 32, 0.55);
+        color: var(--ink);
+        font-family: inherit;
+        font-size: 16px;
+        letter-spacing: 0.06em;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #touchButtons button.active {
+        background: rgba(255, 214, 120, 0.32);
+        border-color: rgba(255, 214, 120, 0.85);
+      }
+      #btnHug { border-color: rgba(255, 214, 120, 0.55); }
+
+      /* 縦持ちだと画角が狭いので、横向きを勧める（遊べなくはない） */
+      #rotateHint {
+        position: fixed;
+        left: 50%; top: 14px;
+        transform: translateX(-50%);
+        display: none;
+        font-size: 13px;
+        background: var(--panel);
+        padding: 7px 14px;
+        border-radius: 999px;
+        pointer-events: none;
+      }
+      @media (orientation: portrait) {
+        body.touch #rotateHint { display: block; }
+      }
+
+      #noscript {
+        position: fixed; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        padding: 32px; text-align: center; line-height: 2;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+
+    <div id="debugPanel" class="hud"></div>
+    <div id="keyPanel" class="hud">WASD / 矢印 : 移動
+Space : 拒否柴
+E : 抱っこをせがむ
+R / T / G / H : デバッグ</div>
+    <div id="hint" class="hud"></div>
+    <div id="speech"></div>
+
+    <div id="touch">
+      <div id="stickZone"></div>
+      <div id="stickBase"><div id="stickKnob"></div></div>
+      <div id="touchButtons">
+        <button id="btnBrace" type="button">拒否柴</button>
+        <button id="btnHug" type="button">抱っこ</button>
+      </div>
+    </div>
+    <div id="rotateHint">横向きにすると遊びやすい</div>
+    <div id="visionLabel"></div>
+
+    <div id="overlay">
+      <div id="overlayTitle"></div>
+      <div id="overlayText"></div>
+      <button id="overlayAction" type="button" class="hidden"></button>
+    </div>
+
+    <noscript>
+      <div id="noscript">
+        このページは JavaScript で 3D を描画します。<br />
+        スクリプトが無効な環境（クイックルック等）では何も表示されません。<br />
+        ブラウザで JavaScript を有効にして開いてください。
+      </div>
+    </noscript>
+
+    <script type="module" src="/src3d/main.ts"></script>
+  </body>
+</html>

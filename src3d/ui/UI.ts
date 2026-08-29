@@ -1,45 +1,40 @@
-import { CONFIG } from '../config';
+import * as THREE from 'three';
 
-/** DOM 側の表示。canvas には文字を描かないので、文字はぜんぶここ。 */
+/** DOM 側の表示をまとめる。3D 側からは文字列を投げるだけにする。 */
 export class UI {
   private stage = document.getElementById('stage') as HTMLDivElement;
-  private pips = document.querySelector('#hp .pips') as HTMLDivElement;
+  private debugPanel = document.getElementById('debugPanel') as HTMLDivElement;
   private hint = document.getElementById('hint') as HTMLDivElement;
   private speech = document.getElementById('speech') as HTMLDivElement;
   private overlay = document.getElementById('overlay') as HTMLDivElement;
   private overlayTitle = document.getElementById('overlayTitle') as HTMLDivElement;
   private overlayText = document.getElementById('overlayText') as HTMLDivElement;
   private overlayAction = document.getElementById('overlayAction') as HTMLButtonElement;
-  private debugPanel = document.getElementById('debugPanel') as HTMLDivElement;
+  private visionLabel = document.getElementById('visionLabel') as HTMLDivElement;
 
   private speechTimer = 0;
-  private shownHp = -1;
+  private screenPos = new THREE.Vector3();
 
   constructor(onAction: () => void) {
     this.overlayAction.addEventListener('click', onAction);
   }
 
-  setHp(hp: number): void {
-    if (hp === this.shownHp) return;
-    this.shownHp = hp;
-    this.pips.innerHTML = '';
-    for (let i = 0; i < CONFIG.ownerMaxHp; i++) {
-      const el = document.createElement('span');
-      el.className = i < hp ? 'pip' : 'pip lost';
-      this.pips.appendChild(el);
-    }
+  setDebugText(text: string): void {
+    this.debugPanel.textContent = text;
   }
 
-  showHint(text: string): void {
+  showHint(text: string, urgent = false): void {
     if (this.hint.textContent !== text) this.hint.textContent = text;
     this.hint.classList.add('show');
+    this.hint.classList.toggle('urgent', urgent);
   }
 
   hideHint(): void {
     this.hint.classList.remove('show');
   }
 
-  say(text: string, seconds = 2.2): void {
+  /** 飼い主のセリフ。犬には意味が分かっていて、飼い主には分かっていない。 */
+  say(text: string, seconds = 2.4): void {
     this.speech.textContent = text;
     this.speech.classList.add('show');
     this.speechTimer = seconds;
@@ -50,23 +45,27 @@ export class UI {
     this.speech.classList.remove('show');
   }
 
-  /** セリフを飼い主の頭の上に貼りつける。座標は画面座標で受け取る */
-  update(dt: number, screenX: number, screenY: number): void {
+  update(dt: number, anchor: THREE.Vector3, camera: THREE.Camera): void {
     if (this.speechTimer > 0) {
       this.speechTimer -= dt;
       if (this.speechTimer <= 0) this.speech.classList.remove('show');
     }
-    this.speech.style.left = `${screenX}px`;
-    this.speech.style.top = `${screenY}px`;
+    this.screenPos.copy(anchor).project(camera);
+    const x = (this.screenPos.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-this.screenPos.y * 0.5 + 0.5) * window.innerHeight;
+    this.speech.style.left = `${x}px`;
+    this.speech.style.top = `${y - 12}px`;
   }
 
   setRewinding(on: boolean): void {
     this.stage.classList.toggle('rewinding', on);
   }
 
-  setDebug(on: boolean, text = ''): void {
-    document.body.classList.toggle('debug', on);
-    if (on) this.debugPanel.textContent = text;
+  /** 未来視。画面から色を抜いて、いま何を見ているかを上に出す */
+  setVision(on: boolean, caption = ''): void {
+    this.stage.classList.toggle('vision', on);
+    this.visionLabel.classList.toggle('show', on);
+    if (on && this.visionLabel.textContent !== caption) this.visionLabel.textContent = caption;
   }
 
   showOverlay(opts: { title?: string; text?: string; action?: string; mode?: 'dim' | 'dark' | 'black' }): void {

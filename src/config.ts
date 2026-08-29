@@ -1,103 +1,86 @@
 /**
  * 調整用の数値はすべてここに置く。処理の中に数字を埋めない。
- * ブラウザのコンソールから `CONFIG.dogSpeed = 9` のように書き換えると
+ * 単位は px と秒。ワールド座標は y が上向き（地面が y=0）。
+ *
+ * ブラウザのコンソールから `CONFIG.dogRunSpeed = 700` のように書き換えると
  * リロードなしで反映される（毎フレーム参照しているため）。
  */
 export const CONFIG = {
-  // --- 犬 ---
-  dogSpeed: 5,           // 移動速度 (world units / 秒)
-  dogTurnSpeed: 12,      // 向きの追従速度
-  braceSpeedFactor: 0.2, // 拒否柴中に犬自身が動ける割合
+  // --- 画面 ---
+  viewHeight: 420,      // 画面の高さがワールド何px分か（小さいほど寄る）
+  cameraLeadX: 130,     // 注視点を進行方向へずらす量
+  cameraBaseY: 105,     // 地面が画面のどのあたりに来るか
+  cameraDamping: 6,     // カメラの追従の速さ
+  cameraDogWeight: 0.4, // 注視点における犬と飼い主の重み
 
-  // --- リード ---
-  leashLength: 3,        // リードの最大長
-  leashTautMargin: 0.15, // これ以内まで伸びたら「張っている」扱い
-  leashPullFactor: 0.55, // 張った状態で犬が引くと飼い主がどれだけ引きずられるか
-  leashMaxPullPerSecond: 1.2, // 飼い主が引かれる速度の上限
+  // --- 物理 ---
+  gravity: 2400,
+  maxFallSpeed: 1400,
 
-  // --- リードを電柱に巻きつける ---
-  // 犬が電柱の向こう側へ回り込むと、リードが電柱に引っかかる。
-  // そうなると飼い主は「電柱からリードの長さまで」しか進めない。
-  poleWrapRadius: 0.26,    // リードがこの距離まで電柱に寄ったら引っかかる
-  poleContactRadius: 0.16, // 見た目上、リードが電柱に触る半径
-  poleUnwrapCos: -0.966,   // 角度が165度を超えて真っ直ぐになったら外れる
-  poleCommitCos: -0.766,   // 角度が140度を切ったら「ちゃんと回り込んだ」とみなす
-  poleGrace: 0.5,          // 回り込まないまま触れただけなら、この秒数で外れる
-  poleHoldMax: 3.0,        // 張りっぱなしがこの秒数を超えたら滑って外れる（詰み防止）
-  poleRewrapDelay: 1.2,    // 外れた直後に同じ電柱へ巻き直さないための待ち
-  poleMinSlack: 0.35,      // 電柱と犬のあいだに最低限残す長さ
+  // --- 犬（身体能力は高めに） ---
+  dogWidth: 46,
+  dogHeight: 30,
+  dogRunSpeed: 430,
+  dogAccel: 3400,
+  dogFriction: 3000,
+  dogAirAccel: 2200,
+  dogJumpSpeed: 760,
+  dogJumpCutoff: 0.55,   // ジャンプ中にキーを離したときの上向き速度の残り（1回だけ切る）
+  dogCoyoteTime: 0.09,   // 地面を離れてからジャンプを受け付ける猶予
+  dogJumpBuffer: 0.11,   // 着地前にジャンプを押しても拾う猶予
+  dogAirJumps: 1,        // 空中ジャンプの回数
+
+  // ダッシュ（翻弄するための足）
+  dashSpeed: 820,
+  dashDuration: 0.15,
+  dashCooldown: 0.45,
+
+  // かみつき
+  biteDuration: 0.16,
+  biteCooldown: 0.26,
+  biteLunge: 380,     // かみつくときに前へ出る速さ
+  biteReach: 40,      // 口先の当たり判定の前方向の長さ
+  biteBounce: 420,    // 硬い相手に弾かれたときの跳ね返り
 
   // --- 飼い主 ---
-  ownerSpeed: 1.5,
-  ownerTurnSpeed: 4,
-  braceOwnerSpeedFactor: 0.1,  // 拒否柴でリードが張っているときの歩行速度倍率
-  crouchDuration: 1.8,         // 抱っこでしゃがんでいる時間
-  hugRange: 1.6,               // 抱っこをせがめる距離
-  ownerHeadHeight: 1.52,       // 立っているときの頭の高さ
-  ownerCrouchHeadHeight: 0.62, // しゃがんだときの頭の高さ
-  ownerHeadRadius: 0.3,
-  ownerHitRadius: 0.26,        // 当たり判定のカプセル半径（見た目より少し細く）
+  ownerWidth: 28,
+  ownerHeight: 78,
+  ownerSpeed: 96,
+  ownerHandHeight: 46,  // リードを持つ手の高さ
+  ownerMaxHp: 3,
+  ownerInvincible: 1.2, // 被弾後の無敵時間
+  ownerBrakeFactor: 0.12, // リードが張って後ろへ引かれているときの歩行速度
 
-  // --- 事故の発動 ---
-  // どの事故も「飼い主が予告地点(triggerX)を越えたら、そこから決まった秒数後に必ず起きる」。
-  // 「その場所に着いたら起きる」にすると、手前で足を止めた瞬間に永久に発生せず、
-  // 先へ進めなくなる。予告してから時間で起こすことで、拒否柴が「ずらす」手段になる。
+  // --- リード ---
+  leashLength: 235,
+  leashTautMargin: 6,
+  leashSwingBoost: 1.34,  // 振り子中にジャンプしたときの接線速度の倍率
+  leashSwingLift: 330,    // そのとき足す上向きの速さ
+  leashReleaseTime: 0.36, // 飛び出した直後、リードを緩めておく時間
+  leashReleaseStretch: 1.65, // そのあいだ伸びる倍率
+  leashReelSpeed: 1500,   // 伸びすぎた分を引き戻す速さ（一気に戻すと事故る）
+  leashPullOwner: 0.16,   // 犬が引っ張ったとき飼い主がどれだけ持っていかれるか
 
-  // --- 事故1: 飛来する看板 ---
-  // 看板は「発射した瞬間の飼い主の位置と速度」から着弾点を計算して飛ぶ。
-  // 速すぎると予測が当たりすぎて、足を止めさせても当たってしまう。
-  // 遅いほど「歩みを止める／横にずらす」が効くようになる。
-  signSpeed: 8.5,
-  signWarnDelay: 1.5,  // 予告地点を越えてから飛んでくるまで
-  signLeadTime: 0.0,   // 予測射撃の補正（+で先読み）
-  signLifetime: 3.0,   // 発射から消えるまで
-  signHitRadius: 0.36,
-
-  // --- 事故2: 落下物 ---
-  fallHeight: 9,        // 落ち始める高さ
-  fallGravity: 20,
-  fallHitRadius: 0.85,  // この距離に飼い主がいたら当たる
-  fallWarnDelay: 1.4,   // 予告地点を越えてから落ち始めるまで
-
-  // --- 事故3: マンホール ---
-  manholeRadius: 0.46,      // 穴の半径。ここに飼い主が入ると落ちる
-  manholeOpenDistance: 3.4, // 飼い主がこれだけ近づくと蓋が外れる
-  manholeSinkDepth: 2.4,
-
-  // --- 事故4: 自転車 ---
-  bikeSpeed: 7.5,
-  bikeHitRadius: 0.8,
-  bikeStartZ: -8,   // 路地の奥から
-  bikeEndZ: 11,     // 車道の方へ抜ける
-  bikeWarnDelay: 1.5, // 予告地点を越えてから飛び出すまで
-
-  // --- タイムリープ ---
-  rewindSeconds: 6,         // 死亡時点から何秒巻き戻すか
-  rewindDuration: 1.4,      // 巻き戻し演出の長さ（実時間）
-  deathPauseDuration: 0.35, // 直撃時に時間が止まる長さ
-
-  // --- ギリギリで避けたときの演出 ---
-  slowMoDuration: 0.6,   // 実時間で何秒スローにするか
-  slowMoFactor: 0.25,    // その間の時間の流れ
-  closeCallDistance: 2.0, // これより近くをかすめたらスローにする
-
-  // --- 未来視 ---
-  visionSpeed: 5,          // 未来視中に時間を何倍で流すか
-  visionFreezeDuration: 0.9, // 事故の瞬間に止める時間（実時間）
-
-  // --- カメラ ---
-  cameraOffset: { x: 5, y: 12, z: 14 }, // 注視点からのオフセット（斜め見下ろし）
-  cameraFrustumHeight: 12,              // 表示する高さ（大きいほど引き）
-  cameraDamping: 1.6,                   // 注視点の追従の鈍さ（小さいほど鈍い）
-  cameraDogWeight: 0.45,                // 注視点における犬と飼い主の重み
-  cameraTargetBias: { x: 0.6, z: -1.3 }, // 注視点をずらす（危険側を広く映す）
-  visionZoom: 1.25,                     // 未来視中は少し引く
-  shakeDecay: 3.5,
+  // リードで巻いて締め上げる。
+  // 横から見た絵なので「相手のまわりを一周する」は成立しない（地面の下を通れない）。
+  // 代わりに「相手の向こう側へ回り込んで、リードを相手の上下に何度も横切らせる」で巻き取る。
+  bindSweeps: 4,          // 何回横切れば締まるか
+  bindForgetTime: 1.5,    // 間が空くと巻きを忘れる
+  bindHoldTime: 0.35,     // 締め上げの演出時間
+  bindLeadMargin: 24,     // 犬が相手より「先にいる」と見なす余裕
 
   // --- 怪異 ---
-  wraithFadeIn: 0.6,
-  wraithHold: 2.6,
-  wraithFadeOut: 1.0,
+  walkerSpeed: 78,
+  flyerSpeed: 120,
+  flyerAmplitude: 46,
+  flyerPeriod: 1.6,
+  bruteSpeed: 42,
+  enemyKnockback: 520,
+
+  // --- 進行 ---
+  respawnY: -520,      // ここまで落ちたら飼い主のそばへ戻す
+  rewindDuration: 0.9, // 失敗したときの巻き戻し演出
+  goalHoldTime: 2.4,
 };
 
 export type Config = typeof CONFIG;
@@ -108,5 +91,4 @@ declare global {
   }
 }
 
-// コンソールから触れるようにしておく（プロトタイプ用）
 window.CONFIG = CONFIG;
