@@ -17,6 +17,8 @@ export class Draw {
   cssW = 0;
   cssH = 0;
   scale = 1;
+  /** いま表示しているワールド高さ。カメラが引くと大きくなる */
+  viewHeight = CONFIG.viewHeight;
 
   constructor(container: HTMLElement) {
     this.canvas = document.createElement('canvas');
@@ -36,7 +38,16 @@ export class Draw {
     this.canvas.height = Math.round(this.cssH * this.dpr);
     this.canvas.style.width = `${this.cssW}px`;
     this.canvas.style.height = `${this.cssH}px`;
-    this.scale = this.cssH / CONFIG.viewHeight;
+    this.scale = this.cssH / this.viewHeight;
+  }
+
+  setViewHeight(h: number): void {
+    this.viewHeight = h;
+    this.scale = this.cssH / h;
+  }
+
+  get aspect(): number {
+    return this.cssW / this.cssH;
   }
 
   /** 画面に映るワールドの幅 */

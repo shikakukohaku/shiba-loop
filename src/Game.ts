@@ -2,7 +2,7 @@ import { CONFIG } from './config';
 import { Draw, type Camera } from './core/Draw';
 import { Input } from './core/Input';
 import { Touch } from './core/Touch';
-import { overlaps, bodyRect } from './core/geom';
+import { clamp, overlaps, bodyRect } from './core/geom';
 import { Dog } from './entities/Dog';
 import { Owner } from './entities/Owner';
 import type { Enemy } from './entities/Enemy';
@@ -35,6 +35,7 @@ export class Game {
 
   state: GameState = 'PLAYING';
   private cam: Camera = { x: 0, y: CONFIG.cameraBaseY };
+  private view = CONFIG.viewHeight;
   private shake = 0;
   private stateTime = 0;
   private speechCooldown = 0;
@@ -84,6 +85,8 @@ export class Game {
     this.leash.reset();
     this.cam.x = this.owner.x + CONFIG.cameraLeadX;
     this.cam.y = CONFIG.cameraBaseY;
+    this.view = CONFIG.viewHeight;
+    this.draw.setViewHeight(this.view);
 
     this.ui.hideOverlay();
     this.ui.clearSpeech();
@@ -281,10 +284,32 @@ export class Game {
 
   // --- 描画 -------------------------------------------------------------
 
+  /**
+   * 犬と飼い主の両方を必ず画面に入れる。
+   * リードが画面幅ぶん伸びるので、離れたら引き、寄れば戻す。
+   */
   private updateCamera(dt: number): void {
-    const w = CONFIG.cameraDogWeight;
-    const tx = this.owner.x * (1 - w) + this.dog.x * w + CONFIG.cameraLeadX;
-    const ty = CONFIG.cameraBaseY + Math.max(0, this.dog.y - 190) * 0.8;
+    const gapX = Math.abs(this.dog.x - this.owner.x);
+    const gapY = Math.abs(this.dog.y - this.owner.y);
+
+    // 両方が収まるのに必要な表示高さ
+    const needByWidth = (gapX + CONFIG.cameraMargin) / this.draw.aspect;
+    const needByHeight = gapY + CONFIG.cameraMargin * 0.8;
+    const wantView = clamp(
+      Math.max(CONFIG.viewHeight, needByWidth, needByHeight),
+      CONFIG.viewHeight,
+      CONFIG.viewHeightMax,
+    );
+    const zk = 1 - Math.exp(-CONFIG.cameraZoomSpeed * dt);
+    this.view += (wantView - this.view) * zk;
+    this.draw.setViewHeight(this.view);
+
+    // 離れているときは中点。近いときだけ進行方向へ寄せる
+    const lead = CONFIG.cameraLeadX * (1 - Math.min(1, gapX / 600));
+    const tx = (this.owner.x + this.dog.x) / 2 + lead;
+    const scale = this.view / CONFIG.viewHeight;
+    const ty = CONFIG.cameraBaseY * scale + Math.max(0, this.dog.y - 190 * scale) * 0.8;
+
     const k = 1 - Math.exp(-CONFIG.cameraDamping * dt);
     this.cam.x += (tx - this.cam.x) * k;
     this.cam.y += (ty - this.cam.y) * k;

@@ -8,10 +8,13 @@
 export const CONFIG = {
   // --- 画面 ---
   viewHeight: 420,      // 画面の高さがワールド何px分か（小さいほど寄る）
-  cameraLeadX: 130,     // 注視点を進行方向へずらす量
+  // リードが長いので、犬と飼い主が離れたらカメラを引いて両方を収める
+  viewHeightMax: 720,   // 引ける限界
+  cameraMargin: 260,    // 犬と飼い主の外側に残す余白
+  cameraZoomSpeed: 3,   // 引き・寄りの追従の速さ
+  cameraLeadX: 130,     // 注視点を進行方向へずらす量（離れるほど効かなくなる）
   cameraBaseY: 105,     // 地面が画面のどのあたりに来るか
   cameraDamping: 6,     // カメラの追従の速さ
-  cameraDogWeight: 0.4, // 注視点における犬と飼い主の重み
 
   // --- 物理 ---
   gravity: 2400,
@@ -52,10 +55,14 @@ export const CONFIG = {
   ownerBrakeFactor: 0.12, // リードが張って後ろへ引かれているときの歩行速度
 
   // --- リード ---
-  leashLength: 235,
-  leashTautMargin: 6,
-  leashSwingBoost: 1.34,  // 振り子中にジャンプしたときの接線速度の倍率
+  // ほぼ画面の幅まで伸びる。短いとアクションの自由が効かない。
+  // そのぶん振り子は半径が大きく、当たると一気に持っていかれる
+  leashLength: 520,
+  leashTautMargin: 8,
+  leashSagMax: 62,        // たるみの描画上の上限（長いと地面を突き抜ける）
+  leashSwingBoost: 1.28,  // 振り子中にジャンプしたときの接線速度の倍率
   leashSwingLift: 330,    // そのとき足す上向きの速さ
+  leashLaunchMaxSpeed: 1500, // 飛び出しの速さの上限。長い振り子は出過ぎる
   leashReleaseTime: 0.36, // 飛び出した直後、リードを緩めておく時間
   leashReleaseStretch: 1.65, // そのあいだ伸びる倍率
   leashReelSpeed: 1500,   // 伸びすぎた分を引き戻す速さ（一気に戻すと事故る）

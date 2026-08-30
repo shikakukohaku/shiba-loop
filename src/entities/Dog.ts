@@ -181,6 +181,13 @@ export class Dog implements Body {
     this.cutJump = false;
     this.vx *= CONFIG.leashSwingBoost;
     this.vy = this.vy * CONFIG.leashSwingBoost + CONFIG.leashSwingLift;
+    // 長い振り子は速度が出すぎるので上限をかける
+    const speed = Math.hypot(this.vx, this.vy);
+    if (speed > CONFIG.leashLaunchMaxSpeed) {
+      const k = CONFIG.leashLaunchMaxSpeed / speed;
+      this.vx *= k;
+      this.vy *= k;
+    }
     this.squash = -1;
     this.airJumps = Math.max(this.airJumps, 1);
   }

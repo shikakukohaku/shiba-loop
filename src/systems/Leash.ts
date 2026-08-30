@@ -156,7 +156,7 @@ export class Leash {
     const cx = dog.collarX();
     const cy = dog.collarY();
     const slack = Math.max(0, 1 - this.state.distance / CONFIG.leashLength);
-    const sag = slack * CONFIG.leashLength * 0.34;
+    const sag = Math.min(slack * CONFIG.leashLength * 0.34, CONFIG.leashSagMax);
 
     const pts: number[][] = [];
     const steps = 14;
